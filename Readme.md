@@ -1,6 +1,6 @@
-# Pangeo Gallery Template
+# XGCM Example Gallery
 
-This repository stores an example gallery repo for the Pangeo Gallery.
+This repository stores the xgcm example repo for the Pangeo Gallery.
 It is configured to automatically build itself using
 [binderbot](https://github.com/pangeo-gallery/binderbot).
 It is linked, via a git submodule, the the
