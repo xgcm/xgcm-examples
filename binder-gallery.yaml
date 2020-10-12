@@ -1,7 +1,7 @@
 ---
 name: Gallery for XGCM Examples and Usecases
 description: >-
-  Examples and tutorials using xgcm with various models and observational datasets.
+  Examples and tutorials using xgcm with models and observational datasets.
 gallery_repository: pangeo-gallery/pangeo-gallery
 binder_url: "https://binder.pangeo.io"
 binder_repo: xgcm/xgcm-examples
