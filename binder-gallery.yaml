@@ -4,6 +4,6 @@ description: >-
   Examples and tutorials using xgcm with models and observational datasets.
 gallery_repository: pangeo-gallery/pangeo-gallery
 binder_url: "https://binder.pangeo.io"
-binder_repo: xgcm/xgcm-examples
+binder_repo: pangeo-gallery/default-binder
 binder_ref: master
 binderbot_target_branch: binderbot-built
