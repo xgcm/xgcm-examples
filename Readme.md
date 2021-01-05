@@ -1,4 +1,4 @@
-# XGCM Example Gallery
+# XGCM Example Gallery (under construction)
 
 This repository stores the xgcm example repo for the Pangeo Gallery.
 It is configured to automatically build itself using
