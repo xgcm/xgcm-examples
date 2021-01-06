@@ -24,5 +24,5 @@ The repo contains the following elements:
 To contribute examples, please fork this repository and add a self contained notebook. The data for the example should be provided in one of these forms:
 
 1. Data available in the cloud (preferred): See `01_eccov4.ipynb` for example.
-2. Other way of accessing data online and download locally from the notebook: See `03_MOM6.ipynb` and `04_nemo_idealized.ipynb` for examples.
-3. For very small examples, it is acceptable to commit the files directly to the `datasets` folder: See `02_mitgcm.ipynb` for example.
+2. Add files to the [xgcm-examples zenodo archive](https://zenodo.org/record/4421428#.X_XP7y1h3x9) and access them from within the notebook *(see `02_mitgcm.ipynb` and `04_nemo_idealized.ipynb` for examples). This should only be done for small datasets.
+3. Other way of accessing data online and download locally from the notebook: See `03_MOM6.ipynb` for examples.
