@@ -1,3 +1,5 @@
+![https://img.shields.io/website?label=gallery.pangeo.io&url=http%3A%2F%2Fgallery.pangeo.io/repos/xgcm/xgcm-examples/](https://gallery.pangeo.io/repos/xgcm/xgcm-examples/)
+
 # XGCM Example Gallery (under construction)
 
 This repository stores the xgcm example repo for the Pangeo Gallery.
