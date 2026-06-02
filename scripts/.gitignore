@@ -1,0 +1,4 @@
+# simulation outputs / downloaded data / instantiated env
+*.jld2
+*.nc
+climaocean_env/Manifest.toml
