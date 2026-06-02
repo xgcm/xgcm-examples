@@ -1,0 +1,31 @@
+# Conda environment for running the xgcm example notebooks.
+#
+#   mamba env create -f environment.yml
+#   conda activate xgcm-examples
+#
+# Note: the tripolar north-fold examples (03_MOM6, 06_tripolar_fold) need the
+# `boundary={"Y": {"fold": ...}}` feature; until it is released, install xgcm
+# from the feature branch instead of the pinned conda package, e.g.
+#   pip install "git+https://github.com/xgcm/xgcm.git@tripolar-north-fold"
+name: xgcm-examples
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - xgcm
+  - xarray
+  - dask
+  - numpy
+  - scipy
+  - numba
+  - netcdf4
+  - zarr
+  - gcsfs
+  - intake
+  - intake-esm
+  - pooch
+  - matplotlib-base
+  - cartopy
+  - jupyter
+  - nbconvert
+  - ipykernel
