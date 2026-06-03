@@ -3,10 +3,11 @@
 # Adapted from ClimaOcean's `examples/one_degree_simulation.jl` to run **locally
 # on a CPU** (no GPU). It builds the realistic TripolarGrid with ETOPO bathymetry,
 # initializes from the ECCO4 state estimate, forces with JRA55-do, and time-steps
-# the coupled ocean--sea-ice model. Surface ocean fields (u, v, T, S) are written
-# to JLD2 every few model-hours so that a partially-completed run (e.g. stopped
-# after ~1 wall-clock hour, once the barotropic mode has adjusted) still yields
-# usable output. Convert the latest snapshot to NetCDF with
+# the coupled ocean--sea-ice model to 10 model-days (long enough to spin up the
+# circulation past the initial barotropic adjustment). Surface ocean fields
+# (u, v, T, S) are written to JLD2 once per model-day, so the day-10 snapshot is
+# saved (and earlier days remain as a safety net for an interrupted run).
+# On a CPU this takes several hours. Convert the final snapshot to NetCDF with
 # `jld2_to_netcdf.jl` for use in the xgcm tripolar-fold example.
 #
 #   julia --project=scripts/climaocean_env scripts/run_one_degree_simulation.jl
@@ -66,7 +67,7 @@ atmosphere = JRA55PrescribedAtmosphere(arch; backend=JRA55NetCDFBackend(80),
                                        include_rivers_and_icebergs = false)
 
 coupled_model = OceanSeaIceModel(ocean, sea_ice; atmosphere, radiation)
-simulation = Simulation(coupled_model; Δt=20minutes, stop_time=60days)
+simulation = Simulation(coupled_model; Δt=20minutes, stop_time=10days)
 
 wall_time = Ref(time_ns())
 function progress(sim)
@@ -80,15 +81,15 @@ function progress(sim)
     wall_time[] = time_ns()
     return nothing
 end
-add_callback!(simulation, progress, TimeInterval(6hours))
+add_callback!(simulation, progress, TimeInterval(12hours))
 
-# Surface ocean output, written often so an early-stopped run is still useful.
+# Surface ocean output, one snapshot per model-day (day 10 is the final one).
 ocean_outputs = merge(ocean.model.tracers, ocean.model.velocities)
 ocean.output_writers[:surface] = JLD2Writer(ocean.model, ocean_outputs;
-    schedule = TimeInterval(3hours),
+    schedule = TimeInterval(1day),
     filename = joinpath(@__DIR__, "ocean_one_degree_surface_fields"),
     indices = (:, :, grid.Nz),
     overwrite_existing = true)
 
-@info "Starting run! (stop_time = 60 days; expect to stop this manually after ~1 wall-clock hour)"
+@info "Starting run! (stop_time = 10 days; expect several hours on CPU)"
 run!(simulation)
