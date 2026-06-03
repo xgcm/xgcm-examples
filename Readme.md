@@ -28,6 +28,6 @@ To contribute examples, please fork this repository and add a self contained not
 1. Data available in the cloud (preferred): See `01_eccov4.ipynb` for example.
 2. Add files to the [xgcm-examples zenodo archive](https://zenodo.org/record/4421428#.X_XP7y1h3x9) and access them from within the notebook *(see `02_mitgcm.ipynb` and `04_nemo_idealized.ipynb` for examples). This should only be done for small datasets.
 3. Other way of accessing data online and download locally from the notebook: See `03_MOM6.ipynb` for examples. The `06_tripolar_fold.ipynb` example demonstrates the tripolar north fold via relative vorticity for three models — MOM6 (Zenodo), NEMO eORCA1 / IPSL-CM6A-LR (CMIP6 read anonymously from the Pangeo Google Cloud Zarr store; needs `zarr`+`gcsfs`), and Oceananigans (generated locally).
-4. Generated locally from a small reproducible script: the Oceananigans section of `06_tripolar_fold.ipynb` reads `oceananigans_tripolar.nc`, built by `scripts/generate_oceananigans_tripolar.jl` (Oceananigans.jl `TripolarGrid`).
+4. Generated locally by a simulation script (data to be posted to Zenodo): the Oceananigans section of `06_tripolar_fold.ipynb` reads `oceananigans_tripolar.nc`, a surface snapshot from a realistic 1° global ClimaOcean/Oceananigans run produced by `scripts/run_one_degree_simulation.jl` and converted with `scripts/jld2_to_netcdf.jl`.
 
 The notebooks can be run in the conda environment described by `environment.yml` (`mamba env create -f environment.yml`), which includes `cartopy` for the map plots.
