@@ -86,7 +86,7 @@ add_callback!(simulation, progress, TimeInterval(12hours))
 # Surface ocean output, one snapshot per model-day (day 10 is the final one).
 ocean_outputs = merge(ocean.model.tracers, ocean.model.velocities)
 ocean.output_writers[:surface] = JLD2Writer(ocean.model, ocean_outputs;
-    schedule = TimeInterval(1day),
+    schedule = TimeInterval(1days),
     filename = joinpath(@__DIR__, "ocean_one_degree_surface_fields"),
     indices = (:, :, grid.Nz),
     overwrite_existing = true)
