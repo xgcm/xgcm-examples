@@ -16,10 +16,12 @@ def code(t):
 
 cells = [
     md(r"""
-# The tripolar north fold: do `diff` and `interp` work across the seam?
+# The bipolar north fold (on tripolar grids): do `diff` and `interp` work across the seam?
 
-Tripolar ocean grids (MOM6, NEMO, Oceananigans) fold the northern edge of the
-domain onto itself. If xgcm handles the fold correctly, fields built with
+Global ocean grids like MOM6, NEMO, and Oceananigans are **tripolar** — the
+South Pole plus two poles displaced over Arctic land — and their northern edge
+folds onto itself along the **bipolar seam** joining the two northern poles.
+If xgcm handles the fold correctly, fields built with
 `interp` and `diff` should be **smooth across the seam**, differing from the
 naive (no-fold) calculation **only along the fold row**.
 
@@ -390,7 +392,7 @@ grid3x3(rossby, models, title="Rossby number  ζ/f", cmap="RdBu_r", label="Ro = 
     md(r"""
 ## Takeaway
 
-For all three tripolar conventions (MOM6/NEMO `"corner"`, Oceananigans `"u"`),
+For all three models' fold conventions (MOM6/NEMO `"corner"`, Oceananigans `"u"`),
 **both** velocity components are interpolated and differenced correctly across
 the North fold: surface speed (to centres *and* to corners) and the Rossby
 number are smooth across the seam, and differ from the naive no-fold calculation
