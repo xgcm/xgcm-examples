@@ -191,6 +191,26 @@ def _imshow(ax, arr_win, ylo, **kw):
     return im
 
 
+def fill_seam_vrow(m):
+    '''Reconstruct the redundant top row of the meridional velocity ``v``.
+
+    On a tripolar F-fold the top ``v`` faces lie on the seam and come in fold
+    pairs ``v(i) = -v(mirror(i))``; the CMIP6 NEMO/MOM6 products keep one half of
+    that row and mask the other (the redundant duplicate). xgcm's fold fills
+    *halos* from the interior, not interior gaps, so we rebuild this seam row
+    here from its fold partner. Without it, interpolating ``v`` to the cell
+    centre (e.g. for surface speed) would leave a blank band at the seam. Only
+    masked cells whose fold partner is present are filled (a no-op for fields
+    that are already complete, e.g. the Oceananigans simulation output).'''
+    v = np.asarray(m["v"].values).copy()
+    nx = v.shape[1]
+    mirror = (-np.arange(nx) - 1) % nx          # seam reflection (seam axis = edge)
+    top = v[-1]
+    fill = ~np.isfinite(top) & np.isfinite(top[mirror])
+    top[fill] = -top[mirror][fill]              # v flips sign across the fold
+    m["v"] = m["v"].copy(data=v)
+
+
 def attach_windows(models, K=6, W=28):
     '''Pick one open-water column window per model (from the fold-padded centre
     speed) and store it on the model, so every seam figure below shows the SAME
@@ -345,6 +365,15 @@ def rossby_seam(models, K=4, W=28):
 CMIP6 surface velocities for MOM6 (GFDL-CM4) and NEMO (IPSL-CM6A-LR) from the
 Pangeo cloud, plus a realistic 1° ClimaOcean/Oceananigans surface snapshot.
 CMIP6 masks its redundant northern row, so we drop it before folding.
+
+One subtlety of the CMIP6 tripolar output: the **top row of the meridional
+velocity `v`** sits on the fold seam, where its faces are fold duplicates
+(`v(i) = -v(mirror(i))`), and the product masks one half of that row. xgcm's fold
+fills *halos*, not interior gaps, so `fill_seam_vrow` rebuilds that seam row from
+its fold partner at load time — otherwise interpolating `v` to cell centres
+(for surface speed) would leave a blank band right at the seam. The fold method
+itself doesn't depend on this; it only ever reflects fully-defined interior
+rows. (It's a no-op for the Oceananigans field, which is complete.)
 """),
     code(r"""
 def _cmip6_surface(source_id, version, fold, label):
@@ -377,7 +406,10 @@ models = [
     _cmip6_surface("IPSL-CM6A-LR", "v20180803", "corner", "NEMO (IPSL-CM6A-LR)"),
     _oceananigans(),
 ]
-attach_windows(models)   # one shared open-water window per model, used by every figure below
+for m in models:          # F-pivot models ship the redundant top v-row masked; rebuild it
+    if m["fold"] in ("corner", "f"):
+        fill_seam_vrow(m)
+attach_windows(models)    # one shared open-water window per model, used by every figure below
 """),
     md(r"""
 ## `interp` across the fold — what fills the halo
@@ -391,15 +423,8 @@ value straight up, so each column is a constant **vertical streak**. The
 **difference** is zero in the interior and nonzero only in the halo: the fold
 changes nothing inside, it only supplies a physically correct neighbourhood
 beyond the edge. (That the continuation is *smooth* is shown by the transect
-below.)
-
-> **Why NEMO shows a two-row gap.** Surface *speed* needs the meridional velocity
-> `v` interpolated to the cell centre, and the CMIP6 NEMO product leaves the
-> **top `v` row** (right at the fold) undefined. Centre-interpolation averages
-> that missing row into the one below, so *two* centre rows go blank; the fold
-> then faithfully mirrors them into the halo. It is a quirk of that dataset's
-> masking, not a fold error — note the `v` panel below (same columns), which
-> plots `v` on its own grid and skips that redundant edge row, has no such gap.
+below. The NEMO panel is gap-free here because we rebuilt its masked seam `v`
+row at load time — see above.)
 """),
     code(r"""
 seam_strip(models)
