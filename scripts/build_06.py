@@ -142,9 +142,11 @@ def rossby(m, fold=True):
 
 These draw a zoom of the top rows in logical index space: the interior just
 below the seam line, and `K` halo rows above it, reconstructed by `pad(...,
-boundary_width={"Y": (0, K)})`. The two dashed verticals mark the pole columns
-(the fold's fixed points, at `x = 0` and `x = Nx/2`), about which the halo is
-reflected.
+boundary_width={"Y": (0, K)})`. Each panel zooms to a window of columns over
+**open water** (the displaced poles themselves sit over Arctic land, so the seam
+is ocean *between* them). Cells are drawn with nearest-neighbour shading, so
+every individual grid cell is a crisp, readable block rather than a smoothed
+image.
 """),
     code(r"""
 def _pad_scalar(S, m, K, mode):
@@ -153,35 +155,54 @@ def _pad_scalar(S, m, K, mode):
     return np.asarray(pad(S, g, boundary_width={"Y": (0, K)}).values)
 
 
-def _pad_v_vector(m, K, mode):
-    '''K halo rows above the v component, folded *as a vector* (sign flips) or
-    extended. v lives at (y_f, x_c); pass u as the other (X) component.'''
+def _pad_v(m, K, mode, vector):
+    '''K halo rows above the v component. vector=True folds it as a vector (the
+    180° pivot flips its sign); vector=False folds it as a plain scalar. v lives
+    at (y_f, x_c); for the vector case u is the other (X) component.'''
     g = _grid(m["coords"], "left", {"fold": m["fold"]} if mode == "fold" else "extend")
-    out = pad({"Y": m["v"]}, g, boundary_width={"Y": (0, K)}, other_component={"X": m["u"]})
+    if vector:
+        out = pad({"Y": m["v"]}, g, boundary_width={"Y": (0, K)}, other_component={"X": m["u"]})
+    else:
+        out = pad(m["v"], g, boundary_width={"Y": (0, K)})
     return np.asarray(out.values)
 
 
-def _imshow(ax, arr, ny, K, nx, **kw):
-    im = ax.imshow(arr, origin="lower", aspect="auto",
-                   extent=[-0.5, nx - 0.5, ny - K - 0.5, ny + K - 0.5], **kw)
-    ax.axhline(ny - 0.5, color="k", lw=1.6)                       # the fold seam
-    for px in (0, nx // 2):
-        ax.axvline(px, color="0.45", ls="--", lw=1.0)            # pole columns
-    ax.set_xticks([0, nx // 2, nx - 1])
+def _ocean_window(rows, nx, W):
+    '''Start column of the length-W window (wrapping in x) with the most ocean
+    (finite cells) in the given rows. The poles sit over land, so we centre on
+    open water rather than on a pole. Returns (start, column indices).'''
+    fin = np.isfinite(rows).sum(axis=0).astype(int)
+    best, score = 0, -1
+    for s in range(nx):
+        sc = int(fin[(np.arange(s, s + W)) % nx].sum())
+        if sc > score:
+            score, best = sc, s
+    return best, (np.arange(best, best + W)) % nx
+
+
+def _imshow(ax, arr_win, ylo, **kw):
+    '''Draw an already-windowed strip with nearest-neighbour shading, so every
+    grid cell is a crisp, individually visible block (no interpolation blur).'''
+    nrow, ncol = arr_win.shape
+    im = ax.imshow(arr_win, origin="lower", aspect="auto", interpolation="nearest",
+                   extent=[-0.5, ncol - 0.5, ylo - 0.5, ylo + nrow - 0.5], **kw)
+    ax.set_xticks([0, ncol // 2, ncol - 1])
     return im
 
 
-def seam_strip(models, K=6):
-    '''Centre surface-speed near the seam: naive halo / fold halo / difference.
-    Interior (below the line) is identical; the fold halo mirrors the interior
-    about the poles while naive smears the edge upward.'''
+def seam_strip(models, K=6, W=28):
+    '''Surface speed near the seam, zoomed to W cells around a pole so each grid
+    cell is individually visible: naive halo / fold halo / difference. The fold
+    halo mirrors the interior about the pole; naive 'extend' smears the edge; the
+    interior (below the line) is untouched.'''
     rlab = ["naive halo\n(extend)", "fold halo\n(mirror)", "naive − fold"]
-    fig, axes = plt.subplots(3, len(models), figsize=(5.2 * len(models), 9.2))
+    fig, axes = plt.subplots(3, len(models), figsize=(4.6 * len(models), 9.4))
     for c, m in enumerate(models):
         S = speed_centre(m, True)
         ny, nx = S.sizes["y_c"], S.sizes["x_c"]
         Sf = _pad_scalar(S, m, K, "fold")[ny - K:ny + K]
         Se = _pad_scalar(S, m, K, "extend")[ny - K:ny + K]
+        start, cols = _ocean_window(Sf, nx, W)
         seam = S.values[ny - K:ny]
         vmax = np.nanpercentile(seam[np.isfinite(seam)], 95) if np.isfinite(seam).any() else 1.0
         vmax = vmax or 1.0
@@ -193,43 +214,54 @@ def seam_strip(models, K=6):
             (1, Sf / vmax, seq, dict(vmin=0, vmax=1)),
             (2, dd, div, dict(vmin=-1, vmax=1)),
         ]:
-            _imshow(axes[r, c], arr, ny, K, nx, cmap=cmap, **kw)
+            ax = axes[r, c]
+            _imshow(ax, arr[:, cols], ny - K, cmap=cmap, **kw)
+            ax.axhline(ny - 0.5, color="k", lw=1.6)              # the fold seam
             if r == 0:
-                axes[r, c].set_title(m["label"], fontsize=10)
+                ax.set_title(f"{m['label']}\n(cols {start}–{start + W - 1})", fontsize=9)
             if c == 0:
-                axes[r, c].set_ylabel(rlab[r], fontsize=9)
+                ax.set_ylabel(rlab[r], fontsize=9)
             if r == 2:
-                axes[r, c].set_xlabel("X index")
+                ax.set_xlabel("X index (windowed)")
     for r, lab in [(0, "speed / max"), (1, "speed / max"), (2, "(naive−fold) / max")]:
         fig.colorbar(axes[r, -1].images[0],
                      ax=list(axes[r, :]), shrink=0.7, pad=0.02, label=lab)
-    fig.suptitle("Surface speed near the seam (per-model scale): the fold halo mirrors the interior;\n"
-                 "naive 'extend' smears the edge. Interior below the line is untouched (difference ≈ 0).",
-                 fontsize=12, y=0.97)
+    fig.suptitle("Surface speed near the seam (per-model scale, zoomed to open water so each cell "
+                 "is visible):\nthe fold halo is the real cross-seam field (structured); naive "
+                 "'extend' smears the edge straight up; interior below the line is untouched.",
+                 fontsize=12, y=0.98)
     plt.show()
 
 
-def component_strip(models, K=6):
-    '''The v velocity component near the seam, folded as a vector. The halo is
-    the interior reflected about the poles AND sign-flipped (180° pivot): across
-    the seam near a pole the colour inverts. A scalar would not flip.'''
-    fig, axes = plt.subplots(1, len(models), figsize=(5.2 * len(models), 3.6))
-    axes = np.atleast_1d(axes)
-    for c, (ax, m) in enumerate(zip(axes, models)):
+def component_strip(models, K=6, W=28):
+    '''Meridional velocity v near the seam, zoomed to open water. Top row folds v
+    as a plain scalar; bottom row folds it as a vector. The halo rows (above the
+    line) are identical in magnitude but opposite in sign — the colours invert —
+    which is the 180° pivot's sign flip. (Interior, below the line, is the same.)'''
+    rlab = ["v folded as\nscalar", "v folded as\nvector"]
+    fig, axes = plt.subplots(2, len(models), figsize=(4.6 * len(models), 5.6))
+    for c, m in enumerate(models):
         ny, nx = m["coords"]["y_c"].size, m["coords"]["x_c"].size
-        Vf = _pad_v_vector(m, K, "fold")[ny - K:ny + K]
-        vmax = np.nanpercentile(np.abs(Vf[np.isfinite(Vf)]), 95) if np.isfinite(Vf).any() else 1.0
+        Vs = _pad_v(m, K, "fold", vector=False)[ny - K:ny + K]
+        Vv = _pad_v(m, K, "fold", vector=True)[ny - K:ny + K]
+        start, cols = _ocean_window(Vv, nx, W)
+        vmax = np.nanpercentile(np.abs(Vv[np.isfinite(Vv)]), 95) if np.isfinite(Vv).any() else 1.0
         vmax = vmax or 1.0
         div = plt.get_cmap("RdBu_r").copy(); div.set_bad("white")
-        im = _imshow(ax, Vf / vmax, ny, K, nx, cmap=div, vmin=-1, vmax=1)
-        ax.set_title(m["label"], fontsize=10)
-        ax.set_xlabel("X index")
-        if c == 0:
-            ax.set_ylabel("v (folded as vector)\n/ max", fontsize=9)
-    fig.colorbar(im, ax=list(axes), shrink=0.8, pad=0.02, label="v / max")
-    fig.suptitle("Meridional velocity v near the seam (fold halo): the interior reflected "
-                 "AND sign-flipped\n(colour inverts across the seam) — the signature of correct "
-                 "vector folding", fontsize=12, y=1.02)
+        for r, arr in [(0, Vs), (1, Vv)]:
+            ax = axes[r, c]
+            _imshow(ax, arr[:, cols] / vmax, ny - K, cmap=div, vmin=-1, vmax=1)
+            ax.axhline(ny - 0.5, color="k", lw=1.6)              # the fold seam
+            if r == 0:
+                ax.set_title(f"{m['label']}\n(cols {start}–{start + W - 1})", fontsize=9)
+            if c == 0:
+                ax.set_ylabel(rlab[r], fontsize=9)
+            if r == 1:
+                ax.set_xlabel("X index (windowed)")
+    fig.colorbar(axes[-1, -1].images[0], ax=list(axes.ravel()), shrink=0.6, pad=0.02, label="v / max")
+    fig.suptitle("Meridional velocity v near the seam: in the halo (above the line) the vector fold "
+                 "is the\nsign-flipped scalar fold — the colours invert. The 180° pivot flips "
+                 "velocities; a scalar stays.", fontsize=12, y=1.0)
     plt.show()
 
 
@@ -270,30 +302,28 @@ def seam_transect(models, K=6, ncols=4):
     plt.show()
 
 
-def rossby_seam(models, K=4):
-    '''The `diff`-based diagnostic. Ro = ζ/f at the corner, naive vs fold, near
-    the seam in index space (difference normalised per model). The fold corrects
-    ζ exactly along the seam row; elsewhere naive and fold agree.'''
-    fig, axes = plt.subplots(1, len(models), figsize=(5.2 * len(models), 3.4))
+def rossby_seam(models, K=4, W=28):
+    '''The `diff`-based diagnostic. Ro = ζ/f at the corner, naive − fold near the
+    seam (per-model scale), zoomed to open water. The fold corrects ζ along the
+    seam row; elsewhere naive and fold agree (≈ white).'''
+    fig, axes = plt.subplots(1, len(models), figsize=(4.6 * len(models), 3.4))
     axes = np.atleast_1d(axes)
     for c, (ax, m) in enumerate(zip(axes, models)):
         ny, nx = m["coords"]["y_c"].size, m["coords"]["x_c"].size
         d = np.asarray((rossby(m, False) - rossby(m, True)).values)[ny - K:ny]
+        start, cols = _ocean_window(d, nx, W)
         vmax = np.nanpercentile(np.abs(d[np.isfinite(d)]), 98) if np.isfinite(d).any() else 1.0
         vmax = vmax or 1.0
         div = plt.get_cmap("RdBu_r").copy(); div.set_bad("white")
-        im = ax.imshow(d / vmax, origin="lower", aspect="auto",
-                       extent=[-0.5, nx - 0.5, ny - K - 0.5, ny - 0.5], cmap=div, vmin=-1, vmax=1)
-        ax.axhline(ny - 1.5, color="k", lw=1.0, ls=":")          # last (seam) row boundary
-        for px in (0, nx // 2):
-            ax.axvline(px, color="0.45", ls="--", lw=1.0)
-        ax.set_xticks([0, nx // 2, nx - 1]); ax.set_title(m["label"], fontsize=10)
-        ax.set_xlabel("X index")
+        im = _imshow(ax, d[:, cols] / vmax, ny - K, cmap=div, vmin=-1, vmax=1)
+        ax.axhline(ny - 1.5, color="k", lw=1.0, ls=":")          # seam-row boundary
+        ax.set_title(f"{m['label']}\n(cols {start}–{start + W - 1})", fontsize=9)
+        ax.set_xlabel("X index (windowed)")
         if c == 0:
             ax.set_ylabel("Y index", fontsize=9)
     fig.colorbar(im, ax=list(axes), shrink=0.8, pad=0.02, label="(naive−fold) Ro / max")
     fig.suptitle("Rossby number ζ/f from `diff`: naive − fold is confined to the seam row "
-                 "(the fold corrects ∂u/∂y there)", fontsize=12, y=1.02)
+                 "(the fold corrects ∂u/∂y there)", fontsize=12, y=1.04)
     plt.show()
 """),
     md(r"""
@@ -336,15 +366,18 @@ models = [
 ]
 """),
     md(r"""
-## `interp` across the fold — the halo is the interior, reflected
+## `interp` across the fold — what fills the halo
 
-Surface speed at tracer (centre) points near the seam. The **interior** (below
-the black line) is the real field. The **fold halo** above the line is that
-interior *reflected about the poles* — the same structures, mirrored — so it
-continues the field across the seam. The **naive** `extend` halo instead copies
-the edge value straight up (vertical streaks). The **difference** is zero in the
-interior and nonzero only in the halo: the fold changes nothing inside, it only
-supplies a physically correct neighbourhood beyond the edge.
+Surface speed at tracer (centre) points near the seam, zoomed to a patch of open
+water so each grid cell is visible. The **interior** (below the black line) is
+the real field. The **fold halo** above the line is the genuine cross-seam
+neighbourhood (the interior reflected about the pole) — real, structured data
+that continues the field. The **naive** `extend` halo instead copies the edge
+value straight up, so each column is a constant **vertical streak**. The
+**difference** is zero in the interior and nonzero only in the halo: the fold
+changes nothing inside, it only supplies a physically correct neighbourhood
+beyond the edge. (That the continuation is *smooth* is shown by the transect
+below.)
 """),
     code(r"""
 seam_strip(models)
@@ -352,11 +385,13 @@ seam_strip(models)
     md(r"""
 ## Vector components flip sign across the seam
 
-The same reflection, but for the meridional velocity `v` folded **as a vector**
-(passing the other component via `other_component`). Folding the grid rotates the
-local axes by 180°, so the halo is the reflected interior **with the sign
-reversed** — across the seam near a pole the colour inverts. A scalar (above)
-does not flip; a velocity does.
+Folding the grid rotates the local axes by 180°, so a velocity component reverses
+sign across the fold while a scalar does not. To see it cell-by-cell we fold the
+meridional velocity `v` two ways in the same window: as a plain **scalar** (top)
+and **as a vector** (bottom, passing the other component via `other_component`).
+Below the seam line the two are identical; in the **halo** above the line they
+are the same magnitude but **opposite sign** — the colours invert. That sign
+flip is the signature of correct vector folding.
 """),
     code(r"""
 component_strip(models)
