@@ -335,28 +335,43 @@ def seam_transect(models, K=6, ncols=4):
     plt.show()
 
 
-def rossby_seam(models, K=4, W=28):
-    '''The `diff`-based diagnostic. Ro = ζ/f at the corner, naive − fold near the
-    seam (per-model scale), zoomed to open water. The fold corrects ζ along the
-    seam row; elsewhere naive and fold agree (≈ white).'''
-    fig, axes = plt.subplots(1, len(models), figsize=(4.6 * len(models), 3.4))
-    axes = np.atleast_1d(axes)
-    for c, (ax, m) in enumerate(zip(axes, models)):
+def rossby_seam(models, K=6):
+    '''The `diff`-based diagnostic, Ro = ζ/f at the cell corner, near the seam:
+    naive (extend) / fold / difference, like the speed strip. ζ uses ∂u/∂y, which
+    crosses the seam, so naive and fold ζ/f agree everywhere except the top (seam)
+    row, where only the fold supplies the correct cross-seam neighbour — the
+    difference panel lights up just that row. Zoomed to the shared window.'''
+    rlab = ["naive (extend)", "fold", "naive − fold"]
+    fig, axes = plt.subplots(3, len(models), figsize=(4.6 * len(models), 9.4))
+
+    def lim(a):
+        v = np.abs(a[np.isfinite(a)])
+        return (float(np.nanpercentile(v, 98)) if v.size else 1.0) or 1.0
+
+    for c, m in enumerate(models):
         ny, nx = m["coords"]["y_c"].size, m["coords"]["x_c"].size
-        d = np.asarray((rossby(m, False) - rossby(m, True)).values)[ny - K:ny]
         start, cols, W = m["win"]
-        vmax = np.nanpercentile(np.abs(d[np.isfinite(d)]), 98) if np.isfinite(d).any() else 1.0
-        vmax = vmax or 1.0
+        rn = np.asarray(rossby(m, False).values)[ny - K:ny]
+        rf = np.asarray(rossby(m, True).values)[ny - K:ny]
+        dd = rn - rf
+        rlim = max(lim(rn), lim(rf))
+        dlim = lim(dd)
         div = plt.get_cmap("RdBu_r").copy(); div.set_bad("white")
-        im = _imshow(ax, d[:, cols] / vmax, ny - K, cmap=div, vmin=-1, vmax=1)
-        ax.axhline(ny - 1.5, color="k", lw=1.0, ls=":")          # seam-row boundary
-        ax.set_title(f"{m['label']}\n(cols {start}–{start + W - 1})", fontsize=9)
-        ax.set_xlabel("X index (windowed)")
-        if c == 0:
-            ax.set_ylabel("Y index", fontsize=9)
-    fig.colorbar(im, ax=list(axes), shrink=0.8, pad=0.02, label="(naive−fold) Ro / max")
-    fig.suptitle("Rossby number ζ/f from `diff`: naive − fold is confined to the seam row "
-                 "(the fold corrects ∂u/∂y there)", fontsize=12, y=1.04)
+        for r, arr, L in [(0, rn, rlim), (1, rf, rlim), (2, dd, dlim)]:
+            ax = axes[r, c]
+            _imshow(ax, arr[:, cols] / L, ny - K, cmap=div, vmin=-1, vmax=1)
+            ax.axhline(ny - 0.5, color="k", lw=1.6)              # the fold seam (top edge)
+            if r == 0:
+                ax.set_title(f"{m['label']}\n(cols {start}–{start + W - 1})", fontsize=9)
+            if c == 0:
+                ax.set_ylabel(rlab[r], fontsize=9)
+            if r == 2:
+                ax.set_xlabel("X index (windowed)")
+    for r, lab in [(0, "ζ/f / max"), (1, "ζ/f / max"), (2, "(naive−fold) / max")]:
+        fig.colorbar(axes[r, -1].images[0], ax=list(axes[r, :]), shrink=0.7, pad=0.02, label=lab)
+    fig.suptitle("Rossby number ζ/f from `diff` near the seam (per-model scale): naive and fold "
+                 "agree\neverywhere except the top (seam) row, where the fold supplies the correct "
+                 "∂u/∂y.", fontsize=12, y=0.98)
     plt.show()
 """),
     md(r"""
