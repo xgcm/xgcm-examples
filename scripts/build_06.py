@@ -1,6 +1,8 @@
-"""Build 06_tripolar_fold.ipynb: surface speed (interpolated to cell centres AND
-to corners) and Rossby number zeta/f across the north fold, each as a 3x3 grid
-(columns = models; rows = naive / fold / difference), on polar projections."""
+"""Build 06_tripolar_fold.ipynb: visualize xgcm's bipolar north fold directly in
+logical grid-index space (no map projection). For three real tripolar models we
+show that the fold fills the northern halo with the interior *reflected about the
+poles* (sign-flipped for velocities), so fields stay continuous across the seam
+while the naive `extend` boundary just smears the edge."""
 import json, os
 EX = "/Users/hfdrake/code/xgcm/docs/xgcm-examples"
 
@@ -20,40 +22,34 @@ cells = [
 
 Global ocean grids like MOM6, NEMO, and Oceananigans are **tripolar** — the
 South Pole plus two poles displaced over Arctic land — and their northern edge
-folds onto itself along the **bipolar seam** joining the two northern poles.
-If xgcm handles the fold correctly, fields built with
-`interp` and `diff` should be **smooth across the seam**, differing from the
-naive (no-fold) calculation **only along the fold row**.
+folds onto itself along the **bipolar seam** joining the two northern poles. To
+evaluate `interp`/`diff`/`derivative` across that edge, xgcm pads a northern
+**halo** by reflecting the interior about the nearest pole (sign-flipping vector
+components). If that reconstruction is correct, a physically smooth field stays
+**smooth across the seam**.
 
-We test this for **three models** (real surface velocities `u`,`v`) with two
-diagnostics, each crossing the fold through a different operation:
+Rather than map the Arctic (where a polar projection distorts the seam, land
+masks it with a blank line, and model noise muddies the picture), we look at the
+fold **directly in logical grid-index space** — x-index across, y-index up. The
+seam is then just a horizontal line, and the fold's action is plain to see:
 
-* **surface current speed** $\sqrt{u^2+v^2}$ from `interp` — shown both
-  interpolated to **tracer (centre) points** (the `v`→centre step crosses the
-  fold) and to **cell corners / vorticity points** (the `u`→corner step crosses
-  it), so *both* velocity components are exercised across the seam;
-* the **Rossby number** $\mathrm{Ro}=\zeta/f$ from `diff`, where
-  $\zeta=\partial v/\partial x-\partial u/\partial y$ (derivatives divided by the
-  cell spacings) and $f=2\Omega\sin\phi$.
+* the **halo is the interior reflected about the poles** — so any structure at
+  the seam is the model's own field mirrored, *not* a fold artifact;
+* the naive `extend` boundary instead **smears the edge value** upward;
+* walking a column **across** the seam, the fold **continues** the real field
+  while naive **flatlines**.
 
-Each diagnostic is a **3×3 grid**: columns are the models, rows are **naive**
-(no fold), **fold-aware**, and their **difference**. The Arctic is drawn as a
-single continuous polar mesh (cell corners reconstructed *through* the fold), so
-the seam itself is plotted rather than left as a blank line — the **difference**
-row then lights up exactly the cells the fold changes: a thin line across the
-pole. We also continue the field across the seam directly (a 1-D transect) as
-the cleanest correctness check. MOM6/NEMO use a `"corner"` fold pivot,
-Oceananigans a `"u"` pivot.
+We show this for **three models** (real surface velocities `u`,`v`): MOM6
+(GFDL-CM4) and NEMO (IPSL-CM6A-LR) use a `"corner"` fold pivot, Oceananigans a
+`"u"` pivot.
 
 > **Dependencies** — the MOM6/NEMO sections read CMIP6 from the Pangeo cloud
-> (`pip install zarr gcsfs`); plots use `cartopy`.
+> (`pip install zarr gcsfs`).
 """),
     code(r"""
 import numpy as np
 import xarray as xr
 import matplotlib.pyplot as plt
-import cartopy.crs as ccrs
-from matplotlib.colors import LogNorm
 
 from xgcm import Grid
 from xgcm.padding import pad
@@ -61,45 +57,6 @@ from xgcm.padding import pad
 so = {"storage_options": {"token": "anon"}}
 EARTH_RADIUS = 6371e3
 OMEGA = 7.2921e-5
-
-
-def _ll2xyz(lon, lat):
-    lo, la = np.radians(lon), np.radians(lat)
-    return np.stack([np.cos(la) * np.cos(lo), np.cos(la) * np.sin(lo), np.sin(la)], -1)
-
-
-def _xyz2ll(v):
-    x, y, z = v[..., 0], v[..., 1], v[..., 2]
-    r = np.sqrt(x * x + y * y + z * z)
-    r = np.where(r == 0, 1.0, r)
-    return np.degrees(np.arctan2(y, x)), np.degrees(np.arcsin(np.clip(z / r, -1, 1)))
-
-
-def _fold_pad_top(arr2d, pivot):
-    '''Append one row at the top (j=ny) of a centre-point scalar field using
-    xgcm's fold reconstruction -- this is the seam partner row.'''
-    ny, nx = arr2d.shape
-    ds = xr.Dataset(coords=dict(x_c=np.arange(nx), x_f=np.arange(nx),
-                                y_c=np.arange(ny), y_f=np.arange(ny)))
-    g = Grid(ds, coords={"X": {"center": "x_c", "right": "x_f"},
-                         "Y": {"center": "y_c", "right": "y_f"}},
-             boundary={"X": "periodic", "Y": {"fold": pivot}}, autoparse_metadata=False)
-    da = xr.DataArray(arr2d, dims=["y_c", "x_c"])
-    return np.asarray(pad(da, g, boundary_width={"Y": (0, 1)}).values)
-
-
-def cell_corners(lon, lat, pivot):
-    '''Centre lon/lat (ny,nx) -> cell-corner lattice (ny+1,nx+1) for pcolormesh
-    (shading="flat"). The top edge is closed across the fold seam via xgcm's
-    fold reconstruction, and averaging is done in 3-D so the pole/dateline are
-    handled cleanly -- so the Arctic is drawn as one continuous mesh with no
-    masked seam.'''
-    lon_p, lat_p = _fold_pad_top(lon, pivot), _fold_pad_top(lat, pivot)  # (ny+1,nx)
-    xyz = _ll2xyz(lon_p, lat_p)
-    xyz = np.concatenate([2 * xyz[:1] - xyz[1:2], xyz], axis=0)          # extrap bottom
-    xyz = np.concatenate([xyz[:, -1:], xyz, xyz[:, :1]], axis=1)        # periodic X
-    blk = (xyz[:-1, :-1] + xyz[1:, :-1] + xyz[:-1, 1:] + xyz[1:, 1:]) / 4.0
-    return _xyz2ll(blk)
 """),
     md(r"""
 ## Helpers
@@ -107,6 +64,8 @@ def cell_corners(lon, lat, pivot):
 `package` puts a model's `u`,`v` on a common staggered index grid and masks land
 (cells whose velocity is missing, or zero where zeros dominate — e.g. the
 Oceananigans immersed boundary), so land never leaks through `interp`/`diff`.
+The diagnostics (`speed_centre`, `speed_corner`, `rossby`) each cross the fold
+through a different operation and grid position.
 """),
     code(r"""
 def package(uo, vo, lon, lat, fold, label):
@@ -124,10 +83,7 @@ def package(uo, vo, lon, lat, fold, label):
     coords = dict(x_c=np.arange(nx), x_f=np.arange(nx), y_c=np.arange(ny), y_f=np.arange(ny))
     u = xr.DataArray(uo, dims=["y_c", "x_f"]).assign_coords(x_f=coords["x_f"], y_c=coords["y_c"])
     v = xr.DataArray(vo, dims=["y_f", "x_c"]).assign_coords(x_c=coords["x_c"], y_f=coords["y_f"])
-    # seam-closing cell-corner lattice (ny+1, nx+1) for pcolormesh(shading="flat")
-    lonc, latc = cell_corners(lon, lat, fold)
-    return dict(coords=coords, u=u, v=v, lon=lon, lat=lat, lonc=lonc, latc=latc,
-                fold=fold, label=label)
+    return dict(coords=coords, u=u, v=v, lon=lon, lat=lat, fold=fold, label=label)
 
 
 def _haversine(lon1, lat1, lon2, lat2):
@@ -153,7 +109,7 @@ def _grid(coords, edge, ybc):
                 boundary={"X": "periodic", "Y": ybc}, autoparse_metadata=False)
 
 
-def speed_centre(m, fold):
+def speed_centre(m, fold=True):
     '''sqrt(u^2+v^2) at tracer points; the v->centre interp crosses the fold.'''
     g = _grid(m["coords"], "left", {"fold": m["fold"]} if fold else "extend")
     uc = g.interp(m["u"], "X")
@@ -162,7 +118,7 @@ def speed_centre(m, fold):
     return np.hypot(uc, vc)
 
 
-def speed_corner(m, fold):
+def speed_corner(m, fold=True):
     '''sqrt(u^2+v^2) at cell corners; the u->corner interp crosses the fold.'''
     g = _grid(m["coords"], "right", {"fold": m["fold"]} if fold else "extend")
     vc = g.interp(m["v"], "X")
@@ -171,7 +127,7 @@ def speed_corner(m, fold):
     return np.hypot(uc, vc)
 
 
-def rossby(m, fold):
+def rossby(m, fold=True):
     '''Ro = (dv/dx - du/dy)/f at the cell corner; the du/dy diff crosses the fold.'''
     g = _grid(m["coords"], "right", {"fold": m["fold"]} if fold else "extend")
     dx, dy = cell_spacings(m["lon"], m["lat"])
@@ -180,33 +136,120 @@ def rossby(m, fold):
             if fold else g.diff(m["u"], "Y", boundary="extend")) / dy
     f = xr.DataArray(2 * OMEGA * np.sin(np.radians(m["lat"])), dims=["y_f", "x_f"])
     return (dvdx - dudy) / f
+"""),
+    md(r"""
+## Seam-space plotting
+
+These draw a zoom of the top rows in logical index space: the interior just
+below the seam line, and `K` halo rows above it, reconstructed by `pad(...,
+boundary_width={"Y": (0, K)})`. The two dashed verticals mark the pole columns
+(the fold's fixed points, at `x = 0` and `x = Nx/2`), about which the halo is
+reflected.
+"""),
+    code(r"""
+def _pad_scalar(S, m, K, mode):
+    '''K halo rows above a centre scalar field: fold (mirror) or extend (smear).'''
+    g = _grid(m["coords"], "right", {"fold": m["fold"]} if mode == "fold" else "extend")
+    return np.asarray(pad(S, g, boundary_width={"Y": (0, K)}).values)
+
+
+def _pad_v_vector(m, K, mode):
+    '''K halo rows above the v component, folded *as a vector* (sign flips) or
+    extended. v lives at (y_f, x_c); pass u as the other (X) component.'''
+    g = _grid(m["coords"], "left", {"fold": m["fold"]} if mode == "fold" else "extend")
+    out = pad({"Y": m["v"]}, g, boundary_width={"Y": (0, K)}, other_component={"X": m["u"]})
+    return np.asarray(out.values)
+
+
+def _imshow(ax, arr, ny, K, nx, **kw):
+    im = ax.imshow(arr, origin="lower", aspect="auto",
+                   extent=[-0.5, nx - 0.5, ny - K - 0.5, ny + K - 0.5], **kw)
+    ax.axhline(ny - 0.5, color="k", lw=1.6)                       # the fold seam
+    for px in (0, nx // 2):
+        ax.axvline(px, color="0.45", ls="--", lw=1.0)            # pole columns
+    ax.set_xticks([0, nx // 2, nx - 1])
+    return im
+
+
+def seam_strip(models, K=6):
+    '''Centre surface-speed near the seam: naive halo / fold halo / difference.
+    Interior (below the line) is identical; the fold halo mirrors the interior
+    about the poles while naive smears the edge upward.'''
+    rlab = ["naive halo\n(extend)", "fold halo\n(mirror)", "naive − fold"]
+    fig, axes = plt.subplots(3, len(models), figsize=(5.2 * len(models), 9.2))
+    for c, m in enumerate(models):
+        S = speed_centre(m, True)
+        ny, nx = S.sizes["y_c"], S.sizes["x_c"]
+        Sf = _pad_scalar(S, m, K, "fold")[ny - K:ny + K]
+        Se = _pad_scalar(S, m, K, "extend")[ny - K:ny + K]
+        seam = S.values[ny - K:ny]
+        vmax = np.nanpercentile(seam[np.isfinite(seam)], 95) if np.isfinite(seam).any() else 1.0
+        vmax = vmax or 1.0
+        dd = (Se - Sf) / vmax                                     # difference in units of vmax
+        seq = plt.get_cmap("viridis").copy(); seq.set_bad("white")
+        div = plt.get_cmap("RdBu_r").copy(); div.set_bad("white")
+        for r, arr, cmap, kw in [
+            (0, Se / vmax, seq, dict(vmin=0, vmax=1)),
+            (1, Sf / vmax, seq, dict(vmin=0, vmax=1)),
+            (2, dd, div, dict(vmin=-1, vmax=1)),
+        ]:
+            _imshow(axes[r, c], arr, ny, K, nx, cmap=cmap, **kw)
+            if r == 0:
+                axes[r, c].set_title(m["label"], fontsize=10)
+            if c == 0:
+                axes[r, c].set_ylabel(rlab[r], fontsize=9)
+            if r == 2:
+                axes[r, c].set_xlabel("X index")
+    for r, lab in [(0, "speed / max"), (1, "speed / max"), (2, "(naive−fold) / max")]:
+        fig.colorbar(axes[r, -1].images[0],
+                     ax=list(axes[r, :]), shrink=0.7, pad=0.02, label=lab)
+    fig.suptitle("Surface speed near the seam (per-model scale): the fold halo mirrors the interior;\n"
+                 "naive 'extend' smears the edge. Interior below the line is untouched (difference ≈ 0).",
+                 fontsize=12, y=0.97)
+    plt.show()
+
+
+def component_strip(models, K=6):
+    '''The v velocity component near the seam, folded as a vector. The halo is
+    the interior reflected about the poles AND sign-flipped (180° pivot): across
+    the seam near a pole the colour inverts. A scalar would not flip.'''
+    fig, axes = plt.subplots(1, len(models), figsize=(5.2 * len(models), 3.6))
+    axes = np.atleast_1d(axes)
+    for c, (ax, m) in enumerate(zip(axes, models)):
+        ny, nx = m["coords"]["y_c"].size, m["coords"]["x_c"].size
+        Vf = _pad_v_vector(m, K, "fold")[ny - K:ny + K]
+        vmax = np.nanpercentile(np.abs(Vf[np.isfinite(Vf)]), 95) if np.isfinite(Vf).any() else 1.0
+        vmax = vmax or 1.0
+        div = plt.get_cmap("RdBu_r").copy(); div.set_bad("white")
+        im = _imshow(ax, Vf / vmax, ny, K, nx, cmap=div, vmin=-1, vmax=1)
+        ax.set_title(m["label"], fontsize=10)
+        ax.set_xlabel("X index")
+        if c == 0:
+            ax.set_ylabel("v (folded as vector)\n/ max", fontsize=9)
+    fig.colorbar(im, ax=list(axes), shrink=0.8, pad=0.02, label="v / max")
+    fig.suptitle("Meridional velocity v near the seam (fold halo): the interior reflected "
+                 "AND sign-flipped\n(colour inverts across the seam) — the signature of correct "
+                 "vector folding", fontsize=12, y=1.02)
+    plt.show()
 
 
 def seam_transect(models, K=6, ncols=4):
-    '''Continue the (scalar) surface speed across the fold into the halo. The
-    fold fills the halo with the true seam-partner row -- a smooth physical
-    continuation of the field across the pole -- whereas the naive boundary
-    just extends the edge value (a flat line). One panel per model; a few ocean
-    columns each. Fold lines keep varying past the seam; naive lines go flat.'''
+    '''Continue surface speed (a scalar) across the seam into the halo. The fold
+    fills the halo with the true seam-partner row, continuing the field; the
+    naive boundary just repeats the edge value (a flat line). A few ocean
+    columns per model.'''
     fig, axes = plt.subplots(1, len(models), figsize=(5 * len(models), 4.2))
     axes = np.atleast_1d(axes)
     for k, (ax, m) in enumerate(zip(axes, models)):
-        g = _grid(m["coords"], "left", {"fold": m["fold"]})
-        uc = g.interp(m["u"], "X")
-        vc = g.interp({"Y": m["v"]}, "Y", other_component={"X": m["u"]}, boundary="extend")
-        S = xr.DataArray(np.asarray(np.hypot(uc, vc).values), dims=["y_c", "x_c"])
+        S = speed_centre(m, True)
         ny = S.sizes["y_c"]
-        Sf = np.asarray(pad(S, _grid(m["coords"], "right", {"fold": m["fold"]}),
-                            boundary_width={"Y": (0, K)}).values)
-        Se = np.asarray(pad(S, _grid(m["coords"], "right", "extend"),
-                            boundary_width={"Y": (0, K)}).values)
+        Sf = _pad_scalar(S, m, K, "fold")
+        Se = _pad_scalar(S, m, K, "extend")
         x = np.arange(ny - K, ny + K)
-        win = Sf[ny - K:ny + K]
-        # need a clean run up to the seam; tolerate NaNs deeper in the halo (gaps ok)
         approach = np.isfinite(Sf[ny - K:ny]).all(axis=0)
-        nfin = np.isfinite(win).sum(axis=0)
+        nfin = np.isfinite(Sf[ny - K:ny + K]).sum(axis=0)
         good = np.where(approach & (nfin >= K + 2))[0]
-        if good.size == 0:                       # coarse, land-locked cap: take most-finite cols
+        if good.size == 0:                       # coarse, land-locked cap: most-finite cols
             good = np.argsort(nfin)[::-1][:ncols]
         sel = good[np.linspace(0, len(good) - 1, min(ncols, len(good))).astype(int)]
         for j, i in enumerate(sel):
@@ -214,97 +257,43 @@ def seam_transect(models, K=6, ncols=4):
             ax.plot(x, Se[ny - K:ny + K, i], "o--", color="C1", ms=3, alpha=.8,
                     label="naive (extend)" if lab else None)
             ax.plot(x, Sf[ny - K:ny + K, i], "o-", color="C0", ms=3, alpha=.9,
-                    label="fold (reconstructed)" if lab else None)
-        ax.axvline(ny - 0.5, color="k", ls=":", alpha=.6,
-                   label="fold seam" if k == 0 else None)
+                    label="fold" if lab else None)
+        ax.axvline(ny - 0.5, color="k", ls=":", alpha=.6, label="seam" if k == 0 else None)
         ax.set_title(m["label"], fontsize=10)
         ax.set_xlabel("Y index  (interior → halo)")
         if k == 0:
             ax.set_ylabel("surface speed [m s$^{-1}$]")
     axes[0].legend(fontsize=8, loc="best")
-    fig.suptitle("Across the seam, the fold reconstructs the real field; the naive boundary flatlines",
+    fig.suptitle("Across the seam the fold continues the real field; the naive boundary flatlines",
                  fontsize=12)
     plt.tight_layout()
     plt.show()
 
 
-def grid3x3(fn, models, *, title, cmap, label, norm=None, diff_cmap="RdBu_r", vlim=None):
-    '''Plot fn(m, fold) for fold in {naive, fold} and their difference, as a
-    3x3 grid (columns = models; rows = naive / fold / naive-minus-fold).'''
-    naive = [fn(m, False) for m in models]
-    fold = [fn(m, True) for m in models]
-    diff = [a - b for a, b in zip(naive, fold)]
-
-    def sym(fields, pct=99, nonzero=False):
-        # symmetric limit per field, then take the median across models so one
-        # eddy-rich model doesn't wash the others out
-        lims = []
-        for f in fields:
-            v = np.abs(np.asarray(f.values).ravel())
-            v = v[np.isfinite(v)]
-            if nonzero:
-                v = v[v > 0]
-            lims.append(float(np.nanpercentile(v, pct)) if v.size else 1.0)
-        return float(np.median(lims))
-
-    if norm is not None:
-        main = None
-    elif vlim is not None:
-        main = vlim
-    else:
-        main = sym(fold, pct=96)
-    rows = [("naive (no fold)", naive), ("fold", fold), ("naive − fold", diff)]
-    proj = ccrs.NorthPolarStereo()
-    fig, axes = plt.subplots(3, 3, figsize=(15, 14), subplot_kw=dict(projection=proj))
-    cmap_m = plt.get_cmap(cmap).copy(); cmap_m.set_bad("lightgray")     # land -> grey
-    cmap_d = plt.get_cmap(diff_cmap).copy(); cmap_d.set_bad("lightgray")
-    # Project the seam-closed corner lattice into the stereographic plane ourselves
-    # and draw there: this avoids cartopy's PlateCarree antimeridian wrap, which
-    # would otherwise slice white gaps across the cap. Corners that fall outside
-    # the projection (far south) become non-finite; mask any cell touching one
-    # and replace those coords with a dummy (such cells are never drawn).
-    pdata = []
-    for m in models:
-        xyz = proj.transform_points(ccrs.PlateCarree(), m["lonc"], m["latc"])
-        Xp, Yp = xyz[..., 0].copy(), xyz[..., 1].copy()
-        cf = np.isfinite(Xp) & np.isfinite(Yp)
-        cell_ok = cf[:-1, :-1] & cf[1:, :-1] & cf[:-1, 1:] & cf[1:, 1:]
-        Xp[~cf] = 0.0; Yp[~cf] = 0.0
-        pdata.append((Xp, Yp, cell_ok))
-    for r, (rlabel, row) in enumerate(rows):
-        is_diff = (r == 2)
-        for c, m in enumerate(models):
-            ax = axes[r, c]
-            ax.set_extent([-180, 180, 60, 90], ccrs.PlateCarree())
-            ax.set_facecolor("lightgray")
-            kw = dict(shading="flat")
-            arr = np.asarray(row[c].values)
-            Xp, Yp, cell_ok = pdata[c]
-            if is_diff:
-                # the fold changes the field only at the seam, and by amounts that
-                # differ by orders of magnitude between models -- normalise each
-                # panel by its own Arctic-cap maximum so the seam line is visible
-                # everywhere (the colour shows *where* the fold acts, not magnitude)
-                cap = np.asarray(m["lat"]) > 55
-                vmax = np.nanmax(np.abs(np.where(cap, arr, np.nan)))
-                arr = arr / (vmax if np.isfinite(vmax) and vmax > 0 else 1.0)
-                kw.update(cmap=cmap_d, vmin=-1, vmax=1)
-            elif norm is not None:
-                kw.update(cmap=cmap_m, norm=norm)
-            else:
-                kw.update(cmap=cmap_m, vmin=-main, vmax=main)
-            bad = ~np.isfinite(arr) | ~cell_ok   # land (NaN) -> grey; seam is now drawn
-            pm = ax.pcolormesh(Xp, Yp, np.ma.masked_where(bad, arr), **kw)
-            ax.coastlines(linewidth=0.3, color="0.5")
-            ax.gridlines(color="k", alpha=0.15, linewidth=0.2)
-            if r == 0:
-                ax.set_title(m["label"], fontsize=10)
-            if c == 0:
-                ax.text(-0.12, 0.5, rlabel, transform=ax.transAxes, rotation=90,
-                        va="center", ha="center", fontsize=11, fontweight="bold")
-        clabel = label if not is_diff else "naive − fold  (per-panel max → ±1)"
-        fig.colorbar(pm, ax=list(axes[r, :]), shrink=0.7, pad=0.02, label=clabel)
-    fig.suptitle(title, fontsize=14, y=0.93)
+def rossby_seam(models, K=4):
+    '''The `diff`-based diagnostic. Ro = ζ/f at the corner, naive vs fold, near
+    the seam in index space (difference normalised per model). The fold corrects
+    ζ exactly along the seam row; elsewhere naive and fold agree.'''
+    fig, axes = plt.subplots(1, len(models), figsize=(5.2 * len(models), 3.4))
+    axes = np.atleast_1d(axes)
+    for c, (ax, m) in enumerate(zip(axes, models)):
+        ny, nx = m["coords"]["y_c"].size, m["coords"]["x_c"].size
+        d = np.asarray((rossby(m, False) - rossby(m, True)).values)[ny - K:ny]
+        vmax = np.nanpercentile(np.abs(d[np.isfinite(d)]), 98) if np.isfinite(d).any() else 1.0
+        vmax = vmax or 1.0
+        div = plt.get_cmap("RdBu_r").copy(); div.set_bad("white")
+        im = ax.imshow(d / vmax, origin="lower", aspect="auto",
+                       extent=[-0.5, nx - 0.5, ny - K - 0.5, ny - 0.5], cmap=div, vmin=-1, vmax=1)
+        ax.axhline(ny - 1.5, color="k", lw=1.0, ls=":")          # last (seam) row boundary
+        for px in (0, nx // 2):
+            ax.axvline(px, color="0.45", ls="--", lw=1.0)
+        ax.set_xticks([0, nx // 2, nx - 1]); ax.set_title(m["label"], fontsize=10)
+        ax.set_xlabel("X index")
+        if c == 0:
+            ax.set_ylabel("Y index", fontsize=9)
+    fig.colorbar(im, ax=list(axes), shrink=0.8, pad=0.02, label="(naive−fold) Ro / max")
+    fig.suptitle("Rossby number ζ/f from `diff`: naive − fold is confined to the seam row "
+                 "(the fold corrects ∂u/∂y there)", fontsize=12, y=1.02)
     plt.show()
 """),
     md(r"""
@@ -347,35 +336,40 @@ models = [
 ]
 """),
     md(r"""
-## `interp` across the fold — surface speed at tracer (centre) points
+## `interp` across the fold — the halo is the interior, reflected
 
-The `v`→centre interpolation crosses the seam. Naive and fold-aware rows are
-indistinguishable; the difference is confined to the fold row.
+Surface speed at tracer (centre) points near the seam. The **interior** (below
+the black line) is the real field. The **fold halo** above the line is that
+interior *reflected about the poles* — the same structures, mirrored — so it
+continues the field across the seam. The **naive** `extend` halo instead copies
+the edge value straight up (vertical streaks). The **difference** is zero in the
+interior and nonzero only in the halo: the fold changes nothing inside, it only
+supplies a physically correct neighbourhood beyond the edge.
 """),
     code(r"""
-grid3x3(speed_centre, models, title="Surface speed — interpolated to tracer (centre) points",
-        cmap="magma", norm=LogNorm(vmin=1e-3, vmax=1.0), label="speed [m s$^{-1}$]")
+seam_strip(models)
 """),
     md(r"""
-## `interp` across the fold — surface speed at corners (vorticity points)
+## Vector components flip sign across the seam
 
-Here the `u`→corner interpolation crosses the seam instead — the *other* velocity
-component. Again smooth across the fold, differing only on the fold row.
+The same reflection, but for the meridional velocity `v` folded **as a vector**
+(passing the other component via `other_component`). Folding the grid rotates the
+local axes by 180°, so the halo is the reflected interior **with the sign
+reversed** — across the seam near a pole the colour inverts. A scalar (above)
+does not flip; a velocity does.
 """),
     code(r"""
-grid3x3(speed_corner, models, title="Surface speed — interpolated to cell corners (vorticity points)",
-        cmap="magma", norm=LogNorm(vmin=1e-3, vmax=1.0), label="speed [m s$^{-1}$]")
+component_strip(models)
 """),
     md(r"""
-## Why this works — continuing the field *across* the seam
+## Continuity across the seam — a transect
 
-The clearest single check: take the surface-speed field and ask what sits just
-**beyond** the top row (the halo the operators reach into). The **fold** fills
-that halo with the true seam-partner row, so the field continues **smoothly
-across the pole** (the curve keeps its physical structure past the seam). The
-**naive** boundary just repeats the edge value — a **flat line**. Each panel
-follows a few ocean columns from the interior, across the seam (dotted), into
-the halo, for all three pivots.
+The cleanest correctness check: follow a few ocean columns from the interior,
+across the seam (dotted), into the halo. The **fold** continues the real,
+varying field (the seam partner is a genuine physical neighbour); the **naive**
+boundary flatlines at the edge value. Where a column's halo runs into Arctic
+land the line simply stops — there is no data there, but that is land, not a
+fold error.
 """),
     code(r"""
 seam_transect(models)
@@ -383,38 +377,40 @@ seam_transect(models)
     md(r"""
 ## `diff` across the fold — Rossby number $\zeta/f$
 
-The $\partial u/\partial y$ difference crosses the seam. The fold-aware Rossby
-number is smooth across the pole; the naive one is not.
+The same holds for differencing: $\zeta=\partial v/\partial x-\partial u/\partial y$
+at the cell corner, where $\partial u/\partial y$ crosses the seam. Comparing the
+naive and fold results, they agree everywhere except the seam row, where the fold
+supplies the correct cross-seam neighbour for the derivative.
 """),
     code(r"""
-grid3x3(rossby, models, title="Rossby number  ζ/f", cmap="RdBu_r", label="Ro = ζ/f", vlim=0.01)
+rossby_seam(models)
 """),
     md(r"""
 ## Takeaway
 
-For all three models' fold conventions (MOM6/NEMO `"corner"`, Oceananigans `"u"`),
-**both** velocity components are interpolated and differenced correctly across
-the North fold: surface speed (to centres *and* to corners) and the Rossby
-number are smooth across the seam, and differ from the naive no-fold calculation
-**only on the fold row** — which the difference panels (normalised per panel,
-since the change differs by orders of magnitude between models) light up as a
-single thin line of cells across the pole. The transect makes the same point
-directly: the fold continues the field smoothly across the seam, while the naive
-boundary flatlines. (In the NEMO panels that seam row runs across the central
-Arctic and is mostly *land* — only ~70 of its cells are ocean — so it also shows
-as a thin grey line; that is genuine missing data, not a plotting gap.) xgcm's `boundary={"Y": {"fold": ...}}` mirrors the seam and
-sign-flips folded velocities so the standard staggered operators work across the
-pole. (xgcm's reconstructed fold halos were verified to match Oceananigans' own
-zipper exactly for the tracer and both velocity components.)
+Seen directly in grid-index space, the bipolar north fold is transparent: xgcm
+fills the northern halo with the interior **reflected about the poles**,
+sign-flipping vector components. So
 
-The faint band of vorticity right at the fold in the low-resolution Oceananigans
-panel is *not* an artifact of the fold operators — it appears identically in the
-naive and fold-aware columns because it lives in the model's **velocity field**:
-a grid-scale "north-fold noise" (a step in the across-fold direction, smooth
-along the seam) of the kind tripolar models develop near the seam, here
-accentuated by the coarse 1° grid and short 10-day spin-up.
+* a smooth scalar (surface speed) **continues across the seam** — the fold halo
+  is the mirrored interior, the transect stays continuous — while the naive
+  `extend` boundary smears the edge and flatlines;
+* a velocity component additionally **reverses sign** across the seam, the
+  signature of the 180° pivot;
+* `diff`-based diagnostics (the Rossby number) are corrected **exactly along the
+  seam row** and left untouched elsewhere.
 
-See the [grid topology](../grid_topology.md) docs and [`03_MOM6.ipynb`](03_MOM6.ipynb).
+Because the halo is provably the reflected interior, any wiggle at the seam — for
+instance the grid-scale noise in the coarse, short-spin-up Oceananigans field —
+is the **model's own velocity field, faithfully mirrored**, not an artifact of
+the fold operators. The mirror symmetry is the tell. xgcm's
+`boundary={"X": "periodic", "Y": {"fold": ...}}` makes the standard staggered
+`interp`/`diff`/`derivative` work across the pole for all three models'
+conventions (`"corner"` for MOM6/NEMO, `"u"` for Oceananigans).
+
+See the [grid topology](../grid_topology.md) docs for the four fold pivots and
+how the halo is filled, and [`03_MOM6.ipynb`](03_MOM6.ipynb) for more MOM6
+recipes.
 """),
 ]
 
