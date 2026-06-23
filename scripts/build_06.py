@@ -181,10 +181,15 @@ def _ocean_window(rows, nx, W):
     return best, (np.arange(best, best + W)) % nx
 
 
+LAND = "0.7"   # grey for masked (land) cells, distinct from every colormap
+
+
 def _imshow(ax, arr_win, ylo, **kw):
     '''Draw an already-windowed strip with nearest-neighbour shading, so every
-    grid cell is a crisp, individually visible block (no interpolation blur).'''
+    grid cell is a crisp, individually visible block (no interpolation blur).
+    Masked (land) cells show as grey, distinct from the colormaps.'''
     nrow, ncol = arr_win.shape
+    ax.set_facecolor(LAND)
     im = ax.imshow(arr_win, origin="lower", aspect="auto", interpolation="nearest",
                    extent=[-0.5, ncol - 0.5, ylo - 0.5, ylo + nrow - 0.5], **kw)
     ax.set_xticks([0, ncol // 2, ncol - 1])
@@ -240,8 +245,8 @@ def seam_strip(models, K=6, W=28):
         vmax = np.nanpercentile(seam[np.isfinite(seam)], 95) if np.isfinite(seam).any() else 1.0
         vmax = vmax or 1.0
         dd = (Se - Sf) / vmax                                     # difference in units of vmax
-        seq = plt.get_cmap("viridis").copy(); seq.set_bad("white")
-        div = plt.get_cmap("RdBu_r").copy(); div.set_bad("white")
+        seq = plt.get_cmap("viridis").copy(); seq.set_bad(LAND)
+        div = plt.get_cmap("RdBu_r").copy(); div.set_bad(LAND)
         for r, arr, cmap, kw in [
             (0, Se / vmax, seq, dict(vmin=0, vmax=1)),
             (1, Sf / vmax, seq, dict(vmin=0, vmax=1)),
@@ -280,7 +285,7 @@ def component_strip(models, K=6, W=28):
         start, cols, W = m["win"]
         vmax = np.nanpercentile(np.abs(Vv[np.isfinite(Vv)]), 95) if np.isfinite(Vv).any() else 1.0
         vmax = vmax or 1.0
-        div = plt.get_cmap("RdBu_r").copy(); div.set_bad("white")
+        div = plt.get_cmap("RdBu_r").copy(); div.set_bad(LAND)
         for r, arr in [(0, Vs), (1, Vv)]:
             ax = axes[r, c]
             _imshow(ax, arr[:, cols] / vmax, ny - K, cmap=div, vmin=-1, vmax=1)
@@ -336,12 +341,12 @@ def seam_transect(models, K=6, ncols=4):
 
 
 def rossby_seam(models, K=6):
-    '''The `diff`-based diagnostic, Ro = ζ/f at the cell corner, near the seam:
-    naive (extend) / fold / difference, like the speed strip. ζ uses ∂u/∂y, which
-    crosses the seam, so naive and fold ζ/f agree everywhere except the top (seam)
-    row, where only the fold supplies the correct cross-seam neighbour — the
-    difference panel lights up just that row. Zoomed to the shared window.'''
-    rlab = ["naive (extend)", "fold", "naive − fold"]
+    '''The `diff`-based diagnostic, Ro = ζ/f at the cell corner, near the seam —
+    formatted exactly like the speed strip (interior + halo straddling the seam):
+    naive halo / fold halo / difference. The fold-aware ζ/f is a scalar under the
+    180° fold, so its halo reconstructs by mirroring; the fold halo continues the
+    real vorticity across the seam while the naive `extend` halo smears the edge.'''
+    rlab = ["naive halo\n(extend)", "fold halo\n(mirror)", "naive − fold"]
     fig, axes = plt.subplots(3, len(models), figsize=(4.6 * len(models), 9.4))
 
     def lim(a):
@@ -351,16 +356,17 @@ def rossby_seam(models, K=6):
     for c, m in enumerate(models):
         ny, nx = m["coords"]["y_c"].size, m["coords"]["x_c"].size
         start, cols, W = m["win"]
-        rn = np.asarray(rossby(m, False).values)[ny - K:ny]
-        rf = np.asarray(rossby(m, True).values)[ny - K:ny]
-        dd = rn - rf
-        rlim = max(lim(rn), lim(rf))
+        z = rossby(m, True)                                      # fold-aware ζ/f (corner field)
+        zf = _pad_scalar(z, m, K, "fold")[ny - K:ny + K]        # mirror halo
+        ze = _pad_scalar(z, m, K, "extend")[ny - K:ny + K]      # smeared halo
+        rlim = lim(np.asarray(z.values)[ny - K:ny])
+        dd = ze - zf
         dlim = lim(dd)
-        div = plt.get_cmap("RdBu_r").copy(); div.set_bad("white")
-        for r, arr, L in [(0, rn, rlim), (1, rf, rlim), (2, dd, dlim)]:
+        div = plt.get_cmap("RdBu_r").copy(); div.set_bad(LAND)
+        for r, arr, L in [(0, ze, rlim), (1, zf, rlim), (2, dd, dlim)]:
             ax = axes[r, c]
             _imshow(ax, arr[:, cols] / L, ny - K, cmap=div, vmin=-1, vmax=1)
-            ax.axhline(ny - 0.5, color="k", lw=1.6)              # the fold seam (top edge)
+            ax.axhline(ny - 0.5, color="k", lw=1.6)              # the fold seam
             if r == 0:
                 ax.set_title(f"{m['label']}\n(cols {start}–{start + W - 1})", fontsize=9)
             if c == 0:
@@ -369,9 +375,9 @@ def rossby_seam(models, K=6):
                 ax.set_xlabel("X index (windowed)")
     for r, lab in [(0, "ζ/f / max"), (1, "ζ/f / max"), (2, "(naive−fold) / max")]:
         fig.colorbar(axes[r, -1].images[0], ax=list(axes[r, :]), shrink=0.7, pad=0.02, label=lab)
-    fig.suptitle("Rossby number ζ/f from `diff` near the seam (per-model scale): naive and fold "
-                 "agree\neverywhere except the top (seam) row, where the fold supplies the correct "
-                 "∂u/∂y.", fontsize=12, y=0.98)
+    fig.suptitle("Rossby number ζ/f from `diff` near the seam (per-model scale): the fold halo "
+                 "continues\nthe real vorticity across the seam; the naive 'extend' halo smears "
+                 "the edge.", fontsize=12, y=0.98)
     plt.show()
 """),
     md(r"""
@@ -474,10 +480,13 @@ seam_transect(models)
     md(r"""
 ## `diff` across the fold — Rossby number $\zeta/f$
 
-The same holds for differencing: $\zeta=\partial v/\partial x-\partial u/\partial y$
-at the cell corner, where $\partial u/\partial y$ crosses the seam. Comparing the
-naive and fold results, they agree everywhere except the seam row, where the fold
-supplies the correct cross-seam neighbour for the derivative.
+The same holds for differencing: the relative vorticity
+$\zeta=\partial v/\partial x-\partial u/\partial y$ at the cell corner, whose
+$\partial u/\partial y$ crosses the seam, is computed fold-aware here. Shown the
+same way as the speed strip — the **fold halo** continues the real vorticity
+across the seam (mirrored), while the **naive** `extend` halo smears the edge.
+Note $\zeta/f$ is a *scalar* under the 180° fold (a velocity flips sign, but its
+curl does not), so its halo mirrors without a sign change.
 """),
     code(r"""
 rossby_seam(models)
