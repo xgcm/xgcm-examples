@@ -142,11 +142,12 @@ def rossby(m, fold=True):
 
 These draw a zoom of the top rows in logical index space: the interior just
 below the seam line, and `K` halo rows above it, reconstructed by `pad(...,
-boundary_width={"Y": (0, K)})`. Each panel zooms to a window of columns over
-**open water** (the displaced poles themselves sit over Arctic land, so the seam
-is ocean *between* them). Cells are drawn with nearest-neighbour shading, so
-every individual grid cell is a crisp, readable block rather than a smoothed
-image.
+boundary_width={"Y": (0, K)})`. `attach_windows` picks **one** window of columns
+over **open water** per model (the displaced poles themselves sit over Arctic
+land, so the seam is ocean *between* them) and **all three figures below reuse
+that same window**, so the panels are directly comparable. Cells are drawn with
+nearest-neighbour shading, so every individual grid cell is a crisp, readable
+block rather than a smoothed image.
 """),
     code(r"""
 def _pad_scalar(S, m, K, mode):
@@ -190,6 +191,18 @@ def _imshow(ax, arr_win, ylo, **kw):
     return im
 
 
+def attach_windows(models, K=6, W=28):
+    '''Pick one open-water column window per model (from the fold-padded centre
+    speed) and store it on the model, so every seam figure below shows the SAME
+    region for that model and the panels are directly comparable.'''
+    for m in models:
+        S = speed_centre(m, True)
+        ny, nx = S.sizes["y_c"], S.sizes["x_c"]
+        Sf = _pad_scalar(S, m, K, "fold")[ny - K:ny + K]
+        start, cols = _ocean_window(Sf, nx, W)
+        m["win"] = (start, cols, W)
+
+
 def seam_strip(models, K=6, W=28):
     '''Surface speed near the seam, zoomed to W cells around a pole so each grid
     cell is individually visible: naive halo / fold halo / difference. The fold
@@ -202,7 +215,7 @@ def seam_strip(models, K=6, W=28):
         ny, nx = S.sizes["y_c"], S.sizes["x_c"]
         Sf = _pad_scalar(S, m, K, "fold")[ny - K:ny + K]
         Se = _pad_scalar(S, m, K, "extend")[ny - K:ny + K]
-        start, cols = _ocean_window(Sf, nx, W)
+        start, cols, W = m["win"]
         seam = S.values[ny - K:ny]
         vmax = np.nanpercentile(seam[np.isfinite(seam)], 95) if np.isfinite(seam).any() else 1.0
         vmax = vmax or 1.0
@@ -244,7 +257,7 @@ def component_strip(models, K=6, W=28):
         ny, nx = m["coords"]["y_c"].size, m["coords"]["x_c"].size
         Vs = _pad_v(m, K, "fold", vector=False)[ny - K:ny + K]
         Vv = _pad_v(m, K, "fold", vector=True)[ny - K:ny + K]
-        start, cols = _ocean_window(Vv, nx, W)
+        start, cols, W = m["win"]
         vmax = np.nanpercentile(np.abs(Vv[np.isfinite(Vv)]), 95) if np.isfinite(Vv).any() else 1.0
         vmax = vmax or 1.0
         div = plt.get_cmap("RdBu_r").copy(); div.set_bad("white")
@@ -311,7 +324,7 @@ def rossby_seam(models, K=4, W=28):
     for c, (ax, m) in enumerate(zip(axes, models)):
         ny, nx = m["coords"]["y_c"].size, m["coords"]["x_c"].size
         d = np.asarray((rossby(m, False) - rossby(m, True)).values)[ny - K:ny]
-        start, cols = _ocean_window(d, nx, W)
+        start, cols, W = m["win"]
         vmax = np.nanpercentile(np.abs(d[np.isfinite(d)]), 98) if np.isfinite(d).any() else 1.0
         vmax = vmax or 1.0
         div = plt.get_cmap("RdBu_r").copy(); div.set_bad("white")
@@ -364,6 +377,7 @@ models = [
     _cmip6_surface("IPSL-CM6A-LR", "v20180803", "corner", "NEMO (IPSL-CM6A-LR)"),
     _oceananigans(),
 ]
+attach_windows(models)   # one shared open-water window per model, used by every figure below
 """),
     md(r"""
 ## `interp` across the fold — what fills the halo
@@ -378,6 +392,14 @@ value straight up, so each column is a constant **vertical streak**. The
 changes nothing inside, it only supplies a physically correct neighbourhood
 beyond the edge. (That the continuation is *smooth* is shown by the transect
 below.)
+
+> **Why NEMO shows a two-row gap.** Surface *speed* needs the meridional velocity
+> `v` interpolated to the cell centre, and the CMIP6 NEMO product leaves the
+> **top `v` row** (right at the fold) undefined. Centre-interpolation averages
+> that missing row into the one below, so *two* centre rows go blank; the fold
+> then faithfully mirrors them into the halo. It is a quirk of that dataset's
+> masking, not a fold error — note the `v` panel below (same columns), which
+> plots `v` on its own grid and skips that redundant edge row, has no such gap.
 """),
     code(r"""
 seam_strip(models)
