@@ -343,9 +343,12 @@ def seam_transect(models, K=6, ncols=4):
 def rossby_seam(models, K=6):
     '''The `diff`-based diagnostic, Ro = ζ/f at the cell corner, near the seam —
     formatted exactly like the speed strip (interior + halo straddling the seam):
-    naive halo / fold halo / difference. The fold-aware ζ/f is a scalar under the
-    180° fold, so its halo reconstructs by mirroring; the fold halo continues the
-    real vorticity across the seam while the naive `extend` halo smears the edge.'''
+    naive halo / fold halo / difference. Relative vorticity is a *pseudoscalar*:
+    the bipolar fold reverses the orientation of the local frame, so ζ/f changes
+    sign across the seam (like a velocity component). Its halo is therefore the
+    mirror of the interior with the sign reversed; with that flip the fold halo
+    continues the real vorticity smoothly across the seam, while the naive
+    `extend` halo smears the edge.'''
     rlab = ["naive halo\n(extend)", "fold halo\n(mirror)", "naive − fold"]
     fig, axes = plt.subplots(3, len(models), figsize=(4.6 * len(models), 9.4))
 
@@ -357,7 +360,9 @@ def rossby_seam(models, K=6):
         ny, nx = m["coords"]["y_c"].size, m["coords"]["x_c"].size
         start, cols, W = m["win"]
         z = rossby(m, True)                                      # fold-aware ζ/f (corner field)
-        zf = _pad_scalar(z, m, K, "fold")[ny - K:ny + K]        # mirror halo
+        zf_full = _pad_scalar(z, m, K, "fold")
+        zf_full[ny:] = -zf_full[ny:]                            # ζ/f is fold-odd: flip the halo
+        zf = zf_full[ny - K:ny + K]                             # mirror + sign-flip halo
         ze = _pad_scalar(z, m, K, "extend")[ny - K:ny + K]      # smeared halo
         rlim = lim(np.asarray(z.values)[ny - K:ny])
         dd = ze - zf
@@ -484,9 +489,11 @@ The same holds for differencing: the relative vorticity
 $\zeta=\partial v/\partial x-\partial u/\partial y$ at the cell corner, whose
 $\partial u/\partial y$ crosses the seam, is computed fold-aware here. Shown the
 same way as the speed strip — the **fold halo** continues the real vorticity
-across the seam (mirrored), while the **naive** `extend` halo smears the edge.
-Note $\zeta/f$ is a *scalar* under the 180° fold (a velocity flips sign, but its
-curl does not), so its halo mirrors without a sign change.
+across the seam, while the **naive** `extend` halo smears the edge. Note
+$\zeta/f$ is a **pseudoscalar**: the bipolar fold reverses the orientation of the
+local coordinate frame, so vorticity **changes sign** across the seam (just as
+the velocity components do). Its halo is the mirror of the interior *with the
+sign reversed* — without that flip the field would jump in sign at the seam.
 """),
     code(r"""
 rossby_seam(models)
