@@ -55,8 +55,6 @@ from xgcm import Grid
 from xgcm.padding import pad
 
 so = {"storage_options": {"token": "anon"}}
-EARTH_RADIUS = 6371e3
-OMEGA = 7.2921e-5
 """),
     md(r"""
 ## Helpers
@@ -64,8 +62,9 @@ OMEGA = 7.2921e-5
 `package` puts a model's `u`,`v` on a common staggered index grid and masks land
 (cells whose velocity is missing, or zero where zeros dominate — e.g. the
 Oceananigans immersed boundary), so land never leaks through `interp`/`diff`.
-The diagnostics (`speed_centre`, `speed_corner`, `rossby`) each cross the fold
-through a different operation and grid position.
+The diagnostics each cross the fold through a different operation and grid
+position: `speed_centre`/`speed_corner` test `interp` (to the cell centre and
+corner), and `divergence` tests `diff` (its `∂v/∂y` term crosses the seam).
 """),
     code(r"""
 def package(uo, vo, lon, lat, fold, label):
@@ -84,22 +83,6 @@ def package(uo, vo, lon, lat, fold, label):
     u = xr.DataArray(uo, dims=["y_c", "x_f"]).assign_coords(x_f=coords["x_f"], y_c=coords["y_c"])
     v = xr.DataArray(vo, dims=["y_f", "x_c"]).assign_coords(x_c=coords["x_c"], y_f=coords["y_f"])
     return dict(coords=coords, u=u, v=v, lon=lon, lat=lat, fold=fold, label=label)
-
-
-def _haversine(lon1, lat1, lon2, lat2):
-    lon1, lat1, lon2, lat2 = map(np.radians, (lon1, lat1, lon2, lat2))
-    h = np.sin((lat2 - lat1) / 2) ** 2 + np.cos(lat1) * np.cos(lat2) * np.sin((lon2 - lon1) / 2) ** 2
-    return 2 * EARTH_RADIUS * np.arcsin(np.sqrt(h))
-
-
-def cell_spacings(lon, lat):
-    lonE = np.concatenate([lon, lon[:, :1]], axis=1)
-    latE = np.concatenate([lat, lat[:, :1]], axis=1)
-    dx = _haversine(lonE[:, :-1], latE[:, :-1], lonE[:, 1:], latE[:, 1:])
-    dy = np.empty_like(lat)
-    dy[:-1] = _haversine(lon[:-1], lat[:-1], lon[1:], lat[1:])
-    dy[-1] = dy[-2]
-    return xr.DataArray(dx, dims=["y_f", "x_f"]), xr.DataArray(dy, dims=["y_f", "x_f"])
 
 
 def _grid(coords, edge, ybc):
@@ -127,15 +110,17 @@ def speed_corner(m, fold=True):
     return np.hypot(uc, vc)
 
 
-def rossby(m, fold=True):
-    '''Ro = (dv/dx - du/dy)/f at the cell corner; the du/dy diff crosses the fold.'''
-    g = _grid(m["coords"], "right", {"fold": m["fold"]} if fold else "extend")
-    dx, dy = cell_spacings(m["lon"], m["lat"])
-    dvdx = g.diff(m["v"], "X", boundary="fill") / dx
-    dudy = (g.diff({"X": m["u"]}, "Y", other_component={"Y": m["v"]}, boundary="fill")
-            if fold else g.diff(m["u"], "Y", boundary="extend")) / dy
-    f = xr.DataArray(2 * OMEGA * np.sin(np.radians(m["lat"])), dims=["y_f", "x_f"])
-    return (dvdx - dudy) / f
+def divergence(m, fold=True):
+    '''Horizontal divergence du/dx + dv/dy (per grid cell) at the cell centre;
+    the dv/dy diff crosses the fold, so this exercises `diff` (and the vector
+    fold of v) across the seam. Unlike vorticity, divergence is a TRUE SCALAR —
+    invariant under the 180° fold — so it is continuous across the seam and its
+    halo is simply the mirrored interior, with no sign subtlety.'''
+    g = _grid(m["coords"], "left", {"fold": m["fold"]} if fold else "extend")
+    dudx = g.diff(m["u"], "X", boundary="fill")
+    dvdy = (g.diff({"Y": m["v"]}, "Y", other_component={"X": m["u"]}, boundary="fill")
+            if fold else g.diff(m["v"], "Y", boundary="extend"))
+    return dudx + dvdy
 """),
     md(r"""
 ## Seam-space plotting
@@ -165,6 +150,18 @@ def _pad_v(m, K, mode, vector):
         out = pad({"Y": m["v"]}, g, boundary_width={"Y": (0, K)}, other_component={"X": m["u"]})
     else:
         out = pad(m["v"], g, boundary_width={"Y": (0, K)})
+    return np.asarray(out.values)
+
+
+def _pad_u(m, K, mode, vector):
+    '''K halo rows above the u component (zonal). vector=True folds it as a
+    vector (the 180° pivot flips its sign); vector=False as a plain scalar. u
+    lives at (y_c, x_f); for the vector case v is the other (Y) component.'''
+    g = _grid(m["coords"], "left", {"fold": m["fold"]} if mode == "fold" else "extend")
+    if vector:
+        out = pad({"X": m["u"]}, g, boundary_width={"Y": (0, K)}, other_component={"Y": m["v"]})
+    else:
+        out = pad(m["u"], g, boundary_width={"Y": (0, K)})
     return np.asarray(out.values)
 
 
@@ -272,34 +269,42 @@ def seam_strip(models, K=6, W=28):
 
 
 def component_strip(models, K=6, W=28):
-    '''Meridional velocity v near the seam, zoomed to open water. Top row folds v
-    as a plain scalar; bottom row folds it as a vector. The halo rows (above the
-    line) are identical in magnitude but opposite in sign — the colours invert —
-    which is the 180° pivot's sign flip. (Interior, below the line, is the same.)'''
-    rlab = ["v folded as\nscalar", "v folded as\nvector"]
-    fig, axes = plt.subplots(2, len(models), figsize=(4.6 * len(models), 5.6))
+    '''Both velocity components near the seam, zoomed to open water. For each of
+    v (meridional) and u (zonal) the upper panel folds the component as a plain
+    scalar and the lower as a vector. In the halo (above the line) the vector
+    fold is the scalar fold with its sign flipped — the colours invert — for
+    BOTH components: the 180° pivot reverses velocities, while a true scalar
+    would not. (Interior, below the line, is identical for the two folds.)'''
+    panels = [("v", False, "v folded as\nscalar"), ("v", True, "v folded as\nvector"),
+              ("u", False, "u folded as\nscalar"), ("u", True, "u folded as\nvector")]
+    pad_fn = {"v": _pad_v, "u": _pad_u}
+    fig, axes = plt.subplots(len(panels), len(models),
+                             figsize=(4.6 * len(models), 2.7 * len(panels)))
     for c, m in enumerate(models):
         ny, nx = m["coords"]["y_c"].size, m["coords"]["x_c"].size
-        Vs = _pad_v(m, K, "fold", vector=False)[ny - K:ny + K]
-        Vv = _pad_v(m, K, "fold", vector=True)[ny - K:ny + K]
         start, cols, W = m["win"]
-        vmax = np.nanpercentile(np.abs(Vv[np.isfinite(Vv)]), 95) if np.isfinite(Vv).any() else 1.0
-        vmax = vmax or 1.0
         div = plt.get_cmap("RdBu_r").copy(); div.set_bad(LAND)
-        for r, arr in [(0, Vs), (1, Vv)]:
+        scale = {}                          # one symmetric scale per component
+        for comp in ("v", "u"):
+            a = pad_fn[comp](m, K, "fold", True)[ny - K:ny + K]
+            s = np.nanpercentile(np.abs(a[np.isfinite(a)]), 95) if np.isfinite(a).any() else 1.0
+            scale[comp] = s or 1.0
+        for r, (comp, vec, lab) in enumerate(panels):
+            arr = pad_fn[comp](m, K, "fold", vec)[ny - K:ny + K]
             ax = axes[r, c]
-            _imshow(ax, arr[:, cols] / vmax, ny - K, cmap=div, vmin=-1, vmax=1)
+            _imshow(ax, arr[:, cols] / scale[comp], ny - K, cmap=div, vmin=-1, vmax=1)
             ax.axhline(ny - 0.5, color="k", lw=1.6)              # the fold seam
             if r == 0:
                 ax.set_title(f"{m['label']}\n(cols {start}–{start + W - 1})", fontsize=9)
             if c == 0:
-                ax.set_ylabel(rlab[r], fontsize=9)
-            if r == 1:
+                ax.set_ylabel(lab, fontsize=9)
+            if r == len(panels) - 1:
                 ax.set_xlabel("X index (windowed)")
-    fig.colorbar(axes[-1, -1].images[0], ax=list(axes.ravel()), shrink=0.6, pad=0.02, label="v / max")
-    fig.suptitle("Meridional velocity v near the seam: in the halo (above the line) the vector fold "
-                 "is the\nsign-flipped scalar fold — the colours invert. The 180° pivot flips "
-                 "velocities; a scalar stays.", fontsize=12, y=1.0)
+    fig.colorbar(axes[-1, -1].images[0], ax=list(axes.ravel()), shrink=0.5, pad=0.02,
+                 label="velocity / max")
+    fig.suptitle("Both velocity components near the seam: in the halo the vector fold is the "
+                 "sign-flipped\nscalar fold — the colours invert — for u and v alike. The 180° "
+                 "pivot flips velocities; a scalar stays.", fontsize=12, y=1.0)
     plt.show()
 
 
@@ -340,15 +345,14 @@ def seam_transect(models, K=6, ncols=4):
     plt.show()
 
 
-def rossby_seam(models, K=6):
-    '''The `diff`-based diagnostic, Ro = ζ/f at the cell corner, near the seam —
-    formatted exactly like the speed strip (interior + halo straddling the seam):
-    naive halo / fold halo / difference. Relative vorticity is a *pseudoscalar*:
-    the bipolar fold reverses the orientation of the local frame, so ζ/f changes
-    sign across the seam (like a velocity component). Its halo is therefore the
-    mirror of the interior with the sign reversed; with that flip the fold halo
-    continues the real vorticity smoothly across the seam, while the naive
-    `extend` halo smears the edge.'''
+def div_strip(models, K=6, W=28):
+    '''Horizontal divergence ∇·u from `diff` near the seam, formatted exactly like
+    the speed strip: naive halo / fold halo / difference. Its ∂v/∂y term crosses
+    the fold (using the vector fold of v), so this tests `diff` across the seam.
+    Divergence is a TRUE SCALAR, so — like speed, and unlike vorticity — its fold
+    halo simply mirrors the interior and continues the field smoothly across the
+    seam, while the naive `extend` halo smears the edge. The difference is nonzero
+    only on the seam row: `diff` is corrected exactly there and nowhere else.'''
     rlab = ["naive halo\n(extend)", "fold halo\n(mirror)", "naive − fold"]
     fig, axes = plt.subplots(3, len(models), figsize=(4.6 * len(models), 9.4))
 
@@ -357,20 +361,17 @@ def rossby_seam(models, K=6):
         return (float(np.nanpercentile(v, 98)) if v.size else 1.0) or 1.0
 
     for c, m in enumerate(models):
-        ny, nx = m["coords"]["y_c"].size, m["coords"]["x_c"].size
+        D = divergence(m, True)
+        ny, nx = D.sizes["y_c"], D.sizes["x_c"]
         start, cols, W = m["win"]
-        z = rossby(m, True)                                      # fold-aware ζ/f (corner field)
-        zf_full = _pad_scalar(z, m, K, "fold")
-        zf_full[ny:] = -zf_full[ny:]                            # ζ/f is fold-odd: flip the halo
-        zf = zf_full[ny - K:ny + K]                             # mirror + sign-flip halo
-        ze = _pad_scalar(z, m, K, "extend")[ny - K:ny + K]      # smeared halo
-        rlim = lim(np.asarray(z.values)[ny - K:ny])
-        dd = ze - zf
-        dlim = lim(dd)
+        Df = _pad_scalar(D, m, K, "fold")[ny - K:ny + K]         # fold halo = mirrored interior
+        De = _pad_scalar(D, m, K, "extend")[ny - K:ny + K]       # smeared halo
+        vmax = lim(np.asarray(D.values)[ny - K:ny])
+        dd = (De - Df) / vmax
         div = plt.get_cmap("RdBu_r").copy(); div.set_bad(LAND)
-        for r, arr, L in [(0, ze, rlim), (1, zf, rlim), (2, dd, dlim)]:
+        for r, arr in [(0, De / vmax), (1, Df / vmax), (2, dd)]:
             ax = axes[r, c]
-            _imshow(ax, arr[:, cols] / L, ny - K, cmap=div, vmin=-1, vmax=1)
+            _imshow(ax, arr[:, cols], ny - K, cmap=div, vmin=-1, vmax=1)
             ax.axhline(ny - 0.5, color="k", lw=1.6)              # the fold seam
             if r == 0:
                 ax.set_title(f"{m['label']}\n(cols {start}–{start + W - 1})", fontsize=9)
@@ -378,11 +379,12 @@ def rossby_seam(models, K=6):
                 ax.set_ylabel(rlab[r], fontsize=9)
             if r == 2:
                 ax.set_xlabel("X index (windowed)")
-    for r, lab in [(0, "ζ/f / max"), (1, "ζ/f / max"), (2, "(naive−fold) / max")]:
+    for r, lab in [(0, "∇·u / max"), (1, "∇·u / max"), (2, "(naive−fold) / max")]:
         fig.colorbar(axes[r, -1].images[0], ax=list(axes[r, :]), shrink=0.7, pad=0.02, label=lab)
-    fig.suptitle("Rossby number ζ/f from `diff` near the seam (per-model scale): the fold halo "
-                 "continues\nthe real vorticity across the seam; the naive 'extend' halo smears "
-                 "the edge.", fontsize=12, y=0.98)
+    fig.suptitle("Horizontal divergence ∇·u from `diff` near the seam (per-model scale): its ∂v/∂y "
+                 "term\ncrosses the fold, so this tests `diff` across the seam. Divergence is a true "
+                 "scalar — the\nfold halo mirrors the interior and continues the field; naive 'extend' "
+                 "smears the edge.", fontsize=11, y=0.99)
     plt.show()
 """),
     md(r"""
@@ -458,13 +460,14 @@ seam_strip(models)
     md(r"""
 ## Vector components flip sign across the seam
 
-Folding the grid rotates the local axes by 180°, so a velocity component reverses
-sign across the fold while a scalar does not. To see it cell-by-cell we fold the
-meridional velocity `v` two ways in the same window: as a plain **scalar** (top)
-and **as a vector** (bottom, passing the other component via `other_component`).
-Below the seam line the two are identical; in the **halo** above the line they
-are the same magnitude but **opposite sign** — the colours invert. That sign
-flip is the signature of correct vector folding.
+Folding the grid rotates the local axes by 180°, so **both** velocity components
+reverse sign across the fold while a scalar does not. To see it cell-by-cell we
+fold each component two ways in the same window: as a plain **scalar** and **as
+a vector** (passing the other component via `other_component`). For `v`
+(meridional) and `u` (zonal) alike, below the seam line the two folds are
+identical; in the **halo** above the line they are the same magnitude but
+**opposite sign** — the colours invert. That sign flip, on both components, is
+the signature of correct vector folding.
 """),
     code(r"""
 component_strip(models)
@@ -483,20 +486,24 @@ fold error.
 seam_transect(models)
 """),
     md(r"""
-## `diff` across the fold — Rossby number $\zeta/f$
+## `diff` across the fold — horizontal divergence $\nabla\!\cdot\mathbf{u}$
 
-The same holds for differencing: the relative vorticity
-$\zeta=\partial v/\partial x-\partial u/\partial y$ at the cell corner, whose
-$\partial u/\partial y$ crosses the seam, is computed fold-aware here. Shown the
-same way as the speed strip — the **fold halo** continues the real vorticity
-across the seam, while the **naive** `extend` halo smears the edge. Note
-$\zeta/f$ is a **pseudoscalar**: the bipolar fold reverses the orientation of the
-local coordinate frame, so vorticity **changes sign** across the seam (just as
-the velocity components do). Its halo is the mirror of the interior *with the
-sign reversed* — without that flip the field would jump in sign at the seam.
+The same holds for differencing. We use the horizontal divergence
+$\nabla\!\cdot\mathbf{u}=\partial u/\partial x+\partial v/\partial y$ at the cell
+**centre**, whose $\partial v/\partial y$ term crosses the seam (and needs the
+vector fold of `v`), so computing it exercises `diff` across the fold. We choose
+divergence deliberately: it is a **true scalar** (invariant under the fold's
+180° rotation), so — exactly like surface speed, and *unlike* relative vorticity
+$\zeta=\partial v/\partial x-\partial u/\partial y$, which is a sign-flipping
+pseudoscalar evaluated at the awkward cell corner — its halo is simply the
+mirrored interior, with no sign subtlety and no registration ambiguity. Shown the
+same way as the speed strip: the **fold halo** continues the field smoothly
+across the seam, the **naive** `extend` halo smears the edge, and their
+**difference** is nonzero only on the seam row — `diff` is corrected exactly
+there and nowhere else.
 """),
     code(r"""
-rossby_seam(models)
+div_strip(models)
 """),
     md(r"""
 ## Takeaway
@@ -510,8 +517,9 @@ sign-flipping vector components. So
   `extend` boundary smears the edge and flatlines;
 * a velocity component additionally **reverses sign** across the seam, the
   signature of the 180° pivot;
-* `diff`-based diagnostics (the Rossby number) are corrected **exactly along the
-  seam row** and left untouched elsewhere.
+* a `diff`-based true scalar (the horizontal divergence) **continues across the
+  seam** just like an interpolated scalar — corrected **exactly along the seam
+  row** and left untouched elsewhere — confirming `diff` works across the fold.
 
 Because the halo is provably the reflected interior, any wiggle at the seam — for
 instance the grid-scale noise in the coarse, short-spin-up Oceananigans field —
