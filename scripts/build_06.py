@@ -351,8 +351,9 @@ def div_strip(models, K=6, W=28):
     the fold (using the vector fold of v), so this tests `diff` across the seam.
     Divergence is a TRUE SCALAR, so — like speed, and unlike vorticity — its fold
     halo simply mirrors the interior and continues the field smoothly across the
-    seam, while the naive `extend` halo smears the edge. The difference is nonzero
-    only on the seam row: `diff` is corrected exactly there and nowhere else.'''
+    seam, while the naive `extend` halo smears the edge. The difference is zero in
+    the interior and nonzero only in the halo: the two boundaries differ only
+    above the seam, leaving the real field below the line untouched.'''
     rlab = ["naive halo\n(extend)", "fold halo\n(mirror)", "naive − fold"]
     fig, axes = plt.subplots(3, len(models), figsize=(4.6 * len(models), 9.4))
 
@@ -499,8 +500,8 @@ pseudoscalar evaluated at the awkward cell corner — its halo is simply the
 mirrored interior, with no sign subtlety and no registration ambiguity. Shown the
 same way as the speed strip: the **fold halo** continues the field smoothly
 across the seam, the **naive** `extend` halo smears the edge, and their
-**difference** is nonzero only on the seam row — `diff` is corrected exactly
-there and nowhere else.
+**difference** is zero in the interior and nonzero only in the halo — the two
+boundaries differ only above the seam, leaving the real field below untouched.
 """),
     code(r"""
 div_strip(models)
