@@ -1,0 +1,23 @@
+# Conda environment for running the xgcm example notebooks.
+#
+#   mamba env create -f environment.yml
+#   conda activate xgcm-examples
+#
+name: xgcm-examples
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - xgcm
+  - xarray
+  - dask
+  - numpy
+  - scipy
+  - netcdf4
+  - zarr
+  - gcsfs
+  - matplotlib-base
+  - cartopy
+  - jupyter
+  - nbconvert
+  - ipykernel
