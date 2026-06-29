@@ -32,4 +32,4 @@ After adding or changing a notebook, execute it end-to-end and commit it with
 its outputs so the documentation renders correctly.
 
 For more on setting up a development environment, see the
-[xgcm contributor guide](https://xgcm.readthedocs.io/en/latest/contributor_guide.html).
+[xgcm contributor guide](https://xgcm.readthedocs.io/en/latest/contributor_guide/).
