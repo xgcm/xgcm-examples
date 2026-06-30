@@ -21,12 +21,13 @@ submodule pointer in the main xgcm repo.
 To contribute an example, fork this repository and add a self-contained
 notebook. Provide the data it needs in one of these forms:
 
-1. **Data available in the cloud (preferred).** See `01_eccov4.ipynb`, or
-   `03_MOM6.ipynb`, which reads GFDL-CM4 output directly from the analysis-ready
-   CMIP6 Zarr store on Google Cloud (read anonymously; needs `zarr`+`gcsfs`).
-2. **A small file in a Zenodo archive**, downloaded from within the notebook.
-   See `02_mitgcm.ipynb` and `04_nemo_idealized.ipynb`. Use this only for small
-   datasets.
+1. **Data available in the cloud (preferred).** See `03_MOM6.ipynb`, which reads
+   GFDL-CM4 output directly from the analysis-ready CMIP6 Zarr store on Google
+   Cloud (read anonymously; needs `zarr`+`gcsfs`).
+2. **A file in a Zenodo archive**, downloaded from within the notebook. See
+   `02_mitgcm.ipynb`, `04_nemo_idealized.ipynb`, and `01_eccov4.ipynb` (which
+   pulls a 12-month ECCOv4r4 subset on the native LLC90 grid). Prefer small
+   datasets where possible.
 
 After adding or changing a notebook, execute it end-to-end and commit it with
 its outputs so the documentation renders correctly.
