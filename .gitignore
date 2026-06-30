@@ -1,2 +1,4 @@
 *.nc
 .ipynb_checkpoints
+eccov4r4_data/
+nemo_idealized_data/
